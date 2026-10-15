@@ -1,0 +1,6 @@
+{
+  "name": "Turbo Horizon: Arcade Racer",
+  "description": "A high-performance vibrant 3D arcade car game optimized for low-end laptops with drifting, nitro boosts, and dynamic traffic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
