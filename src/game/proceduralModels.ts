@@ -438,12 +438,95 @@ export function createPlayerCar(
   // Apply custom racing decals & stripes
   applyCarDecals(root, carId, decalType, stripeColorHex);
 
-  // Attach wheels array for animation
+  // --- INTERACTIVE VEHICLE CONTROLS & OPENABLES ---
+  // 1. Interactive Doors (Hinged low-poly door panels)
+  const doorMat = createCarMaterial(primaryColorHex, 0.7, 0.2);
+  const doorL = new THREE.Group();
+  doorL.position.set(-0.86, 0.5, 0.45); // Left front hinge pivot
+  const doorPanelL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 1.1), doorMat);
+  doorPanelL.position.set(0, 0, -0.55); // offset relative to hinge
+  const handleL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.14), chromeMat);
+  handleL.position.set(-0.02, 0.05, -0.9);
+  doorL.add(doorPanelL, handleL);
+  root.add(doorL);
+
+  const doorR = new THREE.Group();
+  doorR.position.set(0.86, 0.5, 0.45); // Right front hinge pivot
+  const doorPanelR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 1.1), doorMat);
+  doorPanelR.position.set(0, 0, -0.55);
+  const handleR = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.14), chromeMat);
+  handleR.position.set(0.02, 0.05, -0.9);
+  doorR.add(doorPanelR, handleR);
+  root.add(doorR);
+
+  // 2. Interactive Rear Trunk Lid (Hinged at top/front of trunk)
+  const trunk = new THREE.Group();
+  trunk.position.set(0, 0.68, -1.05); // Trunk hinge pivot
+  const trunkLid = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.95), doorMat);
+  trunkLid.position.set(0, 0, -0.48);
+  trunk.add(trunkLid);
+  root.add(trunk);
+
+  // 3. Interactive Amber Turn / Hazard Indicators
+  const indicatorMatOff = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.5,
+  });
+  const indFL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.08), indicatorMatOff.clone());
+  indFL.position.set(-0.84, 0.46, 1.95);
+  const indFR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.08), indicatorMatOff.clone());
+  indFR.position.set(0.84, 0.46, 1.95);
+  const indRL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.08), indicatorMatOff.clone());
+  indRL.position.set(-0.84, 0.46, -1.95);
+  const indRR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.08), indicatorMatOff.clone());
+  indRR.position.set(0.84, 0.46, -1.95);
+  root.add(indFL, indFR, indRL, indRR);
+
+  // 4. Interactive Forward Headlights & Road Spotlights
+  const spotL = new THREE.SpotLight(0xfff7ed, 4.5, 45, Math.PI / 6, 0.35, 1.2);
+  spotL.position.set(-0.6, 0.5, 2.0);
+  const targetL = new THREE.Object3D();
+  targetL.position.set(-0.6, 0.1, 24);
+  root.add(spotL, targetL);
+  spotL.target = targetL;
+
+  const spotR = new THREE.SpotLight(0xfff7ed, 4.5, 45, Math.PI / 6, 0.35, 1.2);
+  spotR.position.set(0.6, 0.5, 2.0);
+  const targetR = new THREE.Object3D();
+  targetR.position.set(0.6, 0.1, 24);
+  root.add(spotR, targetR);
+  spotR.target = targetR;
+
+  // Emissive front headlight lenses
+  const hlLensMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0xfff7ed,
+    emissiveIntensity: 2.2,
+    roughness: 0.1,
+  });
+  const hlLensL = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.06), hlLensMat);
+  hlLensL.position.set(-0.6, 0.45, 2.04);
+  const hlLensR = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.06), hlLensMat);
+  hlLensR.position.set(0.6, 0.45, 2.04);
+  root.add(hlLensL, hlLensR);
+
+  // Attach all references to userData for controller manipulation
   (root as any).userData = {
     wheels,
     carId,
     decalType,
     stripeColorHex,
+    doorL,
+    doorR,
+    trunk,
+    headlights: [hlLensL, hlLensR],
+    spotLights: [spotL, spotR],
+    indicators: {
+      fl: indFL,
+      fr: indFR,
+      rl: indRL,
+      rr: indRR,
+    },
   };
 
   return root;
@@ -901,4 +984,241 @@ export function createCactus(): THREE.Group {
   root.add(stem, armL, connL, armR, connR);
   return root;
 }
+
+/**
+ * 3D Horseshoe Magnet Power-up (red arch with metallic chrome poles)
+ */
+export function createMagnetPickup(): THREE.Group {
+  const root = new THREE.Group();
+
+  const redMat = getOrCreateMaterial('magnet-red-mat', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0xef4444,
+      emissive: 0xdc2626,
+      emissiveIntensity: 0.8,
+      metalness: 0.6,
+      roughness: 0.25,
+      flatShading: true,
+    })
+  );
+
+  const silverMat = getOrCreateMaterial('magnet-silver-mat', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0xf8fafc,
+      metalness: 0.9,
+      roughness: 0.15,
+      flatShading: true,
+    })
+  );
+
+  // Curved horseshoe arch
+  const archGeo = new THREE.TorusGeometry(0.55, 0.16, 8, 16, Math.PI);
+  const arch = new THREE.Mesh(archGeo, redMat);
+  arch.rotation.z = Math.PI;
+  arch.position.y = 0.55;
+  root.add(arch);
+
+  // Left prong
+  const prongL = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.45, 0.32), redMat);
+  prongL.position.set(-0.55, 0.32, 0);
+  const tipL = new THREE.Mesh(new THREE.BoxGeometry(0.33, 0.22, 0.33), silverMat);
+  tipL.position.set(-0.55, 0.05, 0);
+
+  // Right prong
+  const prongR = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.45, 0.32), redMat);
+  prongR.position.set(0.55, 0.32, 0);
+  const tipR = new THREE.Mesh(new THREE.BoxGeometry(0.33, 0.22, 0.33), silverMat);
+  tipR.position.set(0.55, 0.05, 0);
+
+  // Floating magnetic aura ring
+  const auraGeo = new THREE.TorusGeometry(0.85, 0.04, 6, 16);
+  const auraMat = getOrCreateMaterial('magnet-aura-mat', () =>
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+  );
+  const aura = new THREE.Mesh(auraGeo, auraMat);
+  aura.rotation.x = Math.PI / 2;
+  aura.position.y = 0.4;
+  root.add(prongL, tipL, prongR, tipR, aura);
+
+  root.position.y = 1.1;
+  return root;
+}
+
+/**
+ * 3D Shield Power-up (glowing energy crest orb)
+ */
+export function createShieldPickup(): THREE.Group {
+  const root = new THREE.Group();
+
+  const shieldMat = getOrCreateMaterial('shield-pickup-mat', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0x3b82f6,
+      emissive: 0x2563eb,
+      emissiveIntensity: 1.6,
+      metalness: 0.8,
+      roughness: 0.2,
+      flatShading: true,
+    })
+  );
+
+  // Hexagonal shield crest
+  const crestGeo = new THREE.CylinderGeometry(0.55, 0.45, 0.15, 6);
+  crestGeo.rotateX(Math.PI / 2);
+  const crest = new THREE.Mesh(crestGeo, shieldMat);
+  root.add(crest);
+
+  // Golden cross star in center
+  const starGeo = new THREE.BoxGeometry(0.2, 0.6, 0.2);
+  const starMat = getOrCreateMaterial('shield-star-mat', () =>
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xeab308, emissiveIntensity: 1.5 })
+  );
+  const star1 = new THREE.Mesh(starGeo, starMat);
+  const star2 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.2, 0.2), starMat);
+  root.add(star1, star2);
+
+  // Orbital energy ring
+  const orbRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.75, 0.04, 6, 16),
+    new THREE.MeshBasicMaterial({ color: 0x60a5fa })
+  );
+  orbRing.rotation.x = Math.PI / 4;
+  root.add(orbRing);
+
+  root.position.y = 1.1;
+  return root;
+}
+
+/**
+ * Translucent pulsing energy bubble sphere that fits over player car
+ */
+export function createShieldBubble(): THREE.Mesh {
+  const bubbleGeo = new THREE.SphereGeometry(2.35, 16, 12);
+  const bubbleMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.35,
+    wireframe: true,
+  });
+  const bubble = new THREE.Mesh(bubbleGeo, bubbleMat);
+  bubble.position.y = 0.6;
+  return bubble;
+}
+
+/**
+ * Low-poly Glossy Dark Oil Slick Puddle
+ */
+export function createOilSlick(): THREE.Group {
+  const root = new THREE.Group();
+
+  const oilMat = getOrCreateMaterial('oil-mat', () =>
+    new THREE.MeshStandardMaterial({
+      color: 0x09090b,
+      metalness: 0.95,
+      roughness: 0.05,
+      flatShading: true,
+    })
+  );
+
+  // Iridescent dark puddle
+  const puddleGeo = new THREE.CylinderGeometry(1.6, 1.8, 0.04, 8);
+  const puddle = new THREE.Mesh(puddleGeo, oilMat);
+  puddle.position.y = 0.03;
+  puddle.scale.set(1.2, 1, 1.6); // elongated puddle
+  root.add(puddle);
+
+  // Subtle rainbow sheen edge
+  const sheenGeo = new THREE.RingGeometry(1.4, 1.75, 8);
+  const sheenMat = getOrCreateMaterial('oil-sheen-mat', () =>
+    new THREE.MeshBasicMaterial({
+      color: 0x9333ea,
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+    })
+  );
+  const sheen = new THREE.Mesh(sheenGeo, sheenMat);
+  sheen.rotation.x = -Math.PI / 2;
+  sheen.position.y = 0.04;
+  root.add(sheen);
+
+  return root;
+}
+
+/**
+ * 3D Road Construction Barricade with diagonal hazard stripes
+ */
+export function createRoadBarricade(): THREE.Group {
+  const root = new THREE.Group();
+
+  const barMat = getOrCreateMaterial('barricade-wood', () =>
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5, flatShading: true })
+  );
+  const stripeMat = getOrCreateMaterial('barricade-orange', () =>
+    new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4, flatShading: true })
+  );
+  const legMat = getOrCreateMaterial('barricade-legs', () =>
+    new THREE.MeshStandardMaterial({ color: 0x18181b, metalness: 0.7, roughness: 0.4 })
+  );
+
+  // A-frame legs
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 0.6), legMat);
+  legL.position.set(-1.4, 0.55, 0);
+  const legR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 0.6), legMat);
+  legR.position.set(1.4, 0.55, 0);
+
+  // Horizontal striped board
+  const board = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.35, 0.08), barMat);
+  board.position.set(0, 0.8, 0);
+  board.castShadow = true;
+
+  // Diagonal orange hazard stripes across board
+  const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.36, 0.09), stripeMat);
+  s1.position.set(-0.9, 0.8, 0);
+  const s2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.36, 0.09), stripeMat);
+  s2.position.set(0, 0.8, 0);
+  const s3 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.36, 0.09), stripeMat);
+  s3.position.set(0.9, 0.8, 0);
+
+  // Flashing amber construction beacon on top
+  const lightGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.2, 8);
+  const lightMat = getOrCreateMaterial('barricade-light-mat', () =>
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xfacc15, emissiveIntensity: 2.0 })
+  );
+  const beacon = new THREE.Mesh(lightGeo, lightMat);
+  beacon.position.set(0, 1.1, 0);
+
+  root.add(legL, legR, board, s1, s2, s3, beacon);
+  return root;
+}
+
+/**
+ * 3D Orange Traffic Cone
+ */
+export function createTrafficCone(): THREE.Group {
+  const root = new THREE.Group();
+
+  const orangeMat = getOrCreateMaterial('cone-orange', () =>
+    new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4, flatShading: true })
+  );
+  const whiteMat = getOrCreateMaterial('cone-white', () =>
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3, flatShading: true })
+  );
+
+  // Base
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.06, 0.7), orangeMat);
+  base.position.y = 0.03;
+
+  // Cone cone
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.85, 8), orangeMat);
+  cone.position.y = 0.45;
+  cone.castShadow = true;
+
+  // White reflective band
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 0.22, 8), whiteMat);
+  band.position.y = 0.42;
+
+  root.add(base, cone, band);
+  return root;
+}
+
 

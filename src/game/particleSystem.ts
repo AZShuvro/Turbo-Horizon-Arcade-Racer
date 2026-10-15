@@ -171,6 +171,24 @@ export class ParticleSystem {
     }
   }
 
+  public emitRain(aroundX: number, aroundZ: number, count = 10) {
+    for (let i = 0; i < count; i++) {
+      const rx = aroundX + (Math.random() - 0.5) * 35;
+      const rz = aroundZ + (Math.random() - 0.5) * 45;
+      this.emit(
+        rx,
+        8.0 + Math.random() * 6.0,
+        rz,
+        (Math.random() - 0.5) * 1.5,
+        -32 - Math.random() * 10,
+        -5 - Math.random() * 5,
+        0.18,
+        0.35,
+        0x93c5fd
+      );
+    }
+  }
+
   public update(dt: number) {
     let hasUpdates = false;
 

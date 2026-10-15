@@ -1,5 +1,17 @@
 import * as THREE from 'three';
-import { GameMode, GameState, GraphicsQuality, CarStats, PlayerInput, FloatingText, BiomeType, TrackId } from '../types/game';
+import {
+  GameMode,
+  GameState,
+  GraphicsQuality,
+  CarStats,
+  PlayerInput,
+  FloatingText,
+  BiomeType,
+  TrackId,
+  CameraView,
+  WeatherType,
+  TransmissionType,
+} from '../types/game';
 import { createPlayerCar } from './proceduralModels';
 import { TrackManager } from './trackManager';
 import { ParticleSystem } from './particleSystem';
@@ -34,12 +46,20 @@ export class GameEngine {
   public gameState: GameState = 'title';
   public gameMode: GameMode = 'arcade';
 
+  // Weather & Camera View
+  public weather: WeatherType = 'sunset';
+  public cameraView: CameraView = 'thirdPerson';
+
   // Camera Shake & Hitstop
   private cameraShakeIntensity = 0;
   private hitstopTimer = 0; // seconds
 
   // Title showcase orbit
   private titleOrbitAngle = 0;
+
+  // Police Chase state
+  public policeSurvivalTimer = 0;
+  private sirenSoundCooldown = 0;
 
   // Score & Gameplay Metrics
   public score = 0;
@@ -58,6 +78,18 @@ export class GameEngine {
     coins: number;
     timeLeft: number;
     isDrifting: boolean;
+    shield: boolean;
+    magnetTimeLeft: number;
+    currentGear: number;
+    transmission: TransmissionType;
+    clutch: boolean;
+    cameraView: CameraView;
+    weather: WeatherType;
+    headlights: boolean;
+    indicators: string;
+    doorsOpen: boolean;
+    trunkOpen: boolean;
+    heatLevel?: number;
     zoneName?: string;
     trophiesFound?: number;
     totalTrophies?: number;
@@ -67,6 +99,7 @@ export class GameEngine {
   }) => void;
   public onFloatingText?: (text: FloatingText) => void;
   public onGameOver?: (reason: string) => void;
+  public onAchievementTrigger?: (id: string) => void;
 
   constructor(container: HTMLElement, initialCar: CarStats, quality: GraphicsQuality = 'balanced') {
     this.container = container;
@@ -74,19 +107,19 @@ export class GameEngine {
 
     // 1. Scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xfdba74); // Warm sunset orange
+    this.scene.background = new THREE.Color(0xfdba74);
     this.scene.fog = new THREE.FogExp2(0xfdba74, 0.0055);
 
     // 2. Camera
     this.camera = new THREE.PerspectiveCamera(
       60,
       container.clientWidth / Math.max(1, container.clientHeight),
-      0.5,
-      600
+      0.3,
+      700
     );
     this.camera.position.set(0, 3.5, -8);
 
-    // 3. WebGL Renderer (Optimized for low-end hardware)
+    // 3. WebGL Renderer
     this.renderer = new THREE.WebGLRenderer({
       powerPreference: 'high-performance',
       antialias: quality !== 'low',
@@ -99,7 +132,6 @@ export class GameEngine {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(this.renderer.domElement);
 
-    // Apply quality settings
     this.setQuality(quality);
 
     // 4. Lighting Rig
@@ -125,7 +157,7 @@ export class GameEngine {
     // 5. Track Manager
     this.trackManager = new TrackManager(this.scene);
 
-    // 5b. Open World Manager (connecting City -> Beach -> Mountains)
+    // 5b. Open World Manager
     this.openWorldManager = new OpenWorldManager(this.scene);
     this.openWorldManager.setVisible(false);
     this.openWorldManager.onZoneChange = (_zone, zoneTitle) => {
@@ -193,6 +225,65 @@ export class GameEngine {
     }
   }
 
+  // --- CAMERA ANGLE VIEW TOGGLES ---
+  public setCameraView(view: CameraView) {
+    this.cameraView = view;
+    this.onFloatingText?.({
+      id: Date.now(),
+      text: `CAMERA: ${view === 'thirdPerson' ? 'THIRD PERSON' : view === 'hood' ? 'HOOD / COCKPIT' : 'TOP-DOWN ARCADE'}`,
+      type: 'powerup',
+      score: 50,
+      timestamp: Date.now(),
+    });
+  }
+
+  public cycleCameraView() {
+    const views: CameraView[] = ['thirdPerson', 'hood', 'topDown'];
+    const nextIdx = (views.indexOf(this.cameraView) + 1) % views.length;
+    this.setCameraView(views[nextIdx]);
+  }
+
+  // --- WEATHER & LIGHTING VARIATIONS ---
+  public setWeather(weather: WeatherType) {
+    this.weather = weather;
+    this.trackManager.setWeather(weather);
+
+    if (weather === 'sunny') {
+      this.scene.background = new THREE.Color(0x38bdf8); // Sky blue
+      this.scene.fog = new THREE.FogExp2(0xbae6fd, 0.0035);
+      this.hemiLight.color.setHex(0xffffff);
+      this.hemiLight.groundColor.setHex(0x64748b);
+      this.hemiLight.intensity = 1.1;
+      this.dirLight.color.setHex(0xfffbeb);
+      this.dirLight.intensity = 1.8;
+    } else if (weather === 'night') {
+      this.scene.background = new THREE.Color(0x09090b); // Cyber midnight
+      this.scene.fog = new THREE.FogExp2(0x09090b, 0.007);
+      this.hemiLight.color.setHex(0x312e81);
+      this.hemiLight.groundColor.setHex(0x030712);
+      this.hemiLight.intensity = 0.55;
+      this.dirLight.color.setHex(0x1e1b4b);
+      this.dirLight.intensity = 0.45;
+    } else if (weather === 'rain') {
+      this.scene.background = new THREE.Color(0x334155); // Stormy overcast
+      this.scene.fog = new THREE.FogExp2(0x334155, 0.008);
+      this.hemiLight.color.setHex(0x94a3b8);
+      this.hemiLight.groundColor.setHex(0x1e293b);
+      this.hemiLight.intensity = 0.7;
+      this.dirLight.color.setHex(0xe2e8f0);
+      this.dirLight.intensity = 0.95;
+    } else {
+      // Sunset (default)
+      this.scene.background = new THREE.Color(0xfdba74);
+      this.scene.fog = new THREE.FogExp2(0xfdba74, 0.0055);
+      this.hemiLight.color.setHex(0xffedd5);
+      this.hemiLight.groundColor.setHex(0x3b82f6);
+      this.hemiLight.intensity = 0.9;
+      this.dirLight.color.setHex(0xfff7ed);
+      this.dirLight.intensity = 1.6;
+    }
+  }
+
   public setTrack(trackId: TrackId) {
     this.trackManager.setTrack(trackId);
     this.setBiome(this.trackManager.currentBiome);
@@ -200,31 +291,32 @@ export class GameEngine {
 
   public setBiome(biome: BiomeType) {
     this.trackManager.setBiome(biome);
-    if (biome === 'neon') {
-      this.scene.background = new THREE.Color(0x09090b);
-      this.scene.fog = new THREE.FogExp2(0x09090b, 0.006);
-      this.hemiLight.color.setHex(0x818cf8);
-      this.hemiLight.groundColor.setHex(0x06b6d4);
-      this.dirLight.color.setHex(0xa855f7);
-    } else if (biome === 'desert') {
-      this.scene.background = new THREE.Color(0xfbbf24);
-      this.scene.fog = new THREE.FogExp2(0xfbbf24, 0.005);
-      this.hemiLight.color.setHex(0xfef3c7);
-      this.hemiLight.groundColor.setHex(0xb45309);
-      this.dirLight.color.setHex(0xffedd5);
-    } else if (biome === 'alpine') {
-      this.scene.background = new THREE.Color(0x94a3b8);
-      this.scene.fog = new THREE.FogExp2(0x94a3b8, 0.005);
-      this.hemiLight.color.setHex(0xe2e8f0);
-      this.hemiLight.groundColor.setHex(0x334155);
-      this.dirLight.color.setHex(0xffffff);
-    } else {
-      // Sunset
-      this.scene.background = new THREE.Color(0xfdba74);
-      this.scene.fog = new THREE.FogExp2(0xfdba74, 0.0055);
-      this.hemiLight.color.setHex(0xffedd5);
-      this.hemiLight.groundColor.setHex(0x3b82f6);
-      this.dirLight.color.setHex(0xfff7ed);
+    if (this.weather === 'sunset') {
+      if (biome === 'neon') {
+        this.scene.background = new THREE.Color(0x09090b);
+        this.scene.fog = new THREE.FogExp2(0x09090b, 0.006);
+        this.hemiLight.color.setHex(0x818cf8);
+        this.hemiLight.groundColor.setHex(0x06b6d4);
+        this.dirLight.color.setHex(0xa855f7);
+      } else if (biome === 'desert') {
+        this.scene.background = new THREE.Color(0xfbbf24);
+        this.scene.fog = new THREE.FogExp2(0xfbbf24, 0.005);
+        this.hemiLight.color.setHex(0xfef3c7);
+        this.hemiLight.groundColor.setHex(0xb45309);
+        this.dirLight.color.setHex(0xffedd5);
+      } else if (biome === 'alpine') {
+        this.scene.background = new THREE.Color(0x94a3b8);
+        this.scene.fog = new THREE.FogExp2(0x94a3b8, 0.005);
+        this.hemiLight.color.setHex(0xe2e8f0);
+        this.hemiLight.groundColor.setHex(0x334155);
+        this.dirLight.color.setHex(0xffffff);
+      } else {
+        this.scene.background = new THREE.Color(0xfdba74);
+        this.scene.fog = new THREE.FogExp2(0xfdba74, 0.0055);
+        this.hemiLight.color.setHex(0xffedd5);
+        this.hemiLight.groundColor.setHex(0x3b82f6);
+        this.dirLight.color.setHex(0xfff7ed);
+      }
     }
   }
 
@@ -255,98 +347,73 @@ export class GameEngine {
     };
 
     this.carController.onCrash = () => {
-      // Hitstop simulation freeze (60ms) for punchy impact weight
       this.hitstopTimer = 0.06;
       this.cameraShakeIntensity = 0.85;
-      if (this.gameMode === 'arcade') {
-        this.timeLeft = Math.max(0, this.timeLeft - 4); // time penalty on crash
-      }
     };
 
     this.carController.onCheckpointPassed = () => {
       if (this.gameMode === 'arcade') {
-        this.timeLeft += 18; // +18 bonus seconds!
-        this.onFloatingText?.({
-          id: Date.now(),
-          text: 'CHECKPOINT! +18s',
-          type: 'checkpoint',
-          score: 1000,
-          timestamp: Date.now(),
-        });
-        this.score += 1000;
+        this.timeLeft += 18;
+      } else if (this.gameMode === 'timeAttack') {
+        this.timeLeft += 12;
       }
+      this.score += 1500;
+      this.onFloatingText?.({
+        id: Date.now(),
+        text: 'CHECKPOINT! +18s',
+        type: 'checkpoint',
+        score: 1500,
+        timestamp: Date.now(),
+      });
+    };
+
+    this.carController.onAchievementTrigger = (id) => {
+      this.onAchievementTrigger?.(id);
     };
   }
 
   private setupResizeListener() {
     const onResize = () => {
       if (!this.container) return;
-      const width = this.container.clientWidth;
-      const height = this.container.clientHeight;
-      this.camera.aspect = width / Math.max(1, height);
+      const w = this.container.clientWidth;
+      const h = Math.max(1, this.container.clientHeight);
+      this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(width, height);
+      this.renderer.setSize(w, h);
     };
     window.addEventListener('resize', onResize);
   }
 
-  // --- START GAME LOOP ---
   public start(mode: GameMode = 'arcade') {
     this.gameMode = mode;
-    this.gameState = 'playing';
     this.score = 0;
     this.distance = 0;
     this.coins = 0;
     this.nearMisses = 0;
-    this.timeLeft = mode === 'arcade' ? 35 : mode === 'timeAttack' ? 60 : 99999;
-    this.maxDriftScore = 0;
-    this.cameraShakeIntensity = 0;
+    this.policeSurvivalTimer = 0;
+    this.timeLeft = mode === 'timeAttack' ? 45 : 35;
     this.hitstopTimer = 0;
+    this.cameraShakeIntensity = 0;
 
-    if (mode === 'openWorld') {
-      this.carController.isOpenWorld = true;
-      for (const t of this.trackManager.traffic) {
-        t.meshGroup.visible = false;
-        t.active = false;
-      }
-      for (const p of this.trackManager.pickups) {
-        p.meshGroup.visible = false;
-        p.active = false;
-      }
-      for (const c of (this.trackManager as any).roadChunks) {
-        c.visible = false;
-      }
-      for (const cp of this.trackManager.checkpoints) {
-        cp.visible = false;
-      }
+    const isOW = mode === 'openWorld';
+    this.carController.isOpenWorld = isOW;
+    this.openWorldManager.setVisible(isOW);
 
-      this.openWorldManager.setVisible(true);
-      this.scene.background = new THREE.Color(0x38bdf8); // Sky blue
-      this.scene.fog = new THREE.FogExp2(0xbae6fd, 0.0035);
-
-      // Spawn in central crossing facing south toward the beach
-      this.carController.reset(0, 0, Math.PI);
-    } else {
-      this.carController.isOpenWorld = false;
-      for (const c of (this.trackManager as any).roadChunks) {
-        c.visible = true;
-      }
-      this.openWorldManager.setVisible(false);
-      this.trackManager.reset();
-      this.carController.reset(0, 0, 0);
-      this.setBiome(this.trackManager.currentBiome);
+    for (const c of (this.trackManager as any).roadChunks) {
+      c.visible = !isOW;
     }
 
-    soundManager.startEngine();
-    soundManager.startMusic();
-  }
+    if (isOW) {
+      this.openWorldManager.reset();
+      this.carController.reset(0, 0, 0);
+      this.scene.background = new THREE.Color(0x38bdf8);
+      this.scene.fog = new THREE.FogExp2(0xbae6fd, 0.0035);
+    } else {
+      this.trackManager.reset();
+      this.carController.reset(0, 0, 0);
+      this.setWeather(this.weather);
+    }
 
-  public pause() {
-    this.gameState = 'paused';
-    soundManager.stopEngine();
-  }
-
-  public resume() {
     this.gameState = 'playing';
     soundManager.startEngine();
   }
@@ -360,9 +427,19 @@ export class GameEngine {
     }
     this.trackManager.reset();
     this.carController.reset(0, 0, 0);
-    this.setBiome(this.trackManager.currentBiome);
+    this.setWeather(this.weather);
     soundManager.stopEngine();
     this.titleOrbitAngle = 0;
+  }
+
+  public pause() {
+    this.gameState = 'paused';
+    soundManager.stopEngine();
+  }
+
+  public resume() {
+    this.gameState = 'playing';
+    soundManager.startEngine();
   }
 
   public triggerShake(amount = 0.5) {
@@ -376,7 +453,6 @@ export class GameEngine {
     this.lastTime = now;
     const dt = Math.min(rawDt, 0.05);
 
-    // Handle hitstop freeze frame on heavy impacts
     if (this.hitstopTimer > 0) {
       this.hitstopTimer -= dt;
       this.renderer.render(this.scene, this.camera);
@@ -393,19 +469,45 @@ export class GameEngine {
       const speedKmH = Math.round(Math.abs(this.carController.speed) * 3.6);
 
       const isOW = this.gameMode === 'openWorld';
+      const isPolice = this.gameMode === 'policeChase';
 
       if (isOW) {
-        // Update Open World discoveries & zone triggers
         this.openWorldManager.update(carX, carZ, speedKmH, dt);
       } else {
-        // Update Track chunks & Traffic in linear modes
-        this.trackManager.update(this.carController.z, dt);
+        this.trackManager.update(carZ, dt, carX, this.carController.speed, isPolice);
       }
 
-      // 3. Update Particles
+      // 2. Police Chase Logic & Survival
+      if (isPolice) {
+        this.policeSurvivalTimer += dt;
+        this.sirenSoundCooldown -= dt;
+
+        // Siren audio when cop nearby
+        if (this.sirenSoundCooldown <= 0) {
+          const copNearby = this.trackManager.traffic.some(
+            (c) => c.active && c.type === 'cop' && Math.abs(c.z - carZ) < 35
+          );
+          if (copNearby) {
+            soundManager.playSiren();
+            this.sirenSoundCooldown = 4.5;
+          }
+        }
+
+        // 30s survival achievement
+        if (this.policeSurvivalTimer >= 30) {
+          this.onAchievementTrigger?.('cop-evader');
+        }
+      }
+
+      // 3. Weather: Rain droplets in Rain weather
+      if (this.weather === 'rain') {
+        this.particleSystem.emitRain(carX, carZ, 8);
+      }
+
+      // 4. Update Particles
       this.particleSystem.update(dt);
 
-      // 4. Update Game Metrics & Timer
+      // 5. Update Game Metrics & Timer
       this.distance += Math.floor(Math.abs(this.carController.speed) * dt);
       this.score += Math.floor(Math.abs(this.carController.speed) * 0.4 * dt * 10);
 
@@ -419,6 +521,9 @@ export class GameEngine {
         }
       }
 
+      // Heat level calculation (1 to 5 stars)
+      const heatLevel = isPolice ? Math.min(5, 1 + Math.floor(this.policeSurvivalTimer / 12)) : undefined;
+
       // Notify React HUD
       this.onScoreUpdate?.({
         score: this.score,
@@ -428,6 +533,18 @@ export class GameEngine {
         coins: this.coins,
         timeLeft: Math.max(0, Math.ceil(this.timeLeft)),
         isDrifting: this.carController.isDrifting,
+        shield: this.carController.hasShield,
+        magnetTimeLeft: Math.ceil(this.carController.magnetTimer),
+        currentGear: this.carController.currentGear,
+        transmission: this.carController.transmission,
+        clutch: this.carController.clutchEngaged,
+        cameraView: this.cameraView,
+        weather: this.weather,
+        headlights: this.carController.headlightsActive,
+        indicators: this.carController.indicatorState,
+        doorsOpen: this.carController.doorsOpen,
+        trunkOpen: this.carController.trunkOpen,
+        heatLevel,
         zoneName: isOW
           ? this.openWorldManager.currentZone === 'city'
             ? 'Downtown Metropolis'
@@ -442,43 +559,68 @@ export class GameEngine {
         heading: Math.round((((this.carController.headingAngle * 180) / Math.PI) % 360 + 360) % 360),
       });
 
-      // 5. Dynamic Camera Positioning (Smooth exponential damping follow)
+      // 6. Dynamic Camera Follow with 3 Camera Modes
       const speedNorm = Math.min(1.0, this.carController.speed / 50);
 
-      if (isOW) {
-        // 360-degree camera follow in Open World
-        const camDist = 7.6 + speedNorm * 1.8;
-        const camHeight = 3.8 + (this.carController.isAirborne ? 1.5 : 0);
-        const h = this.carController.headingAngle;
-
-        _idealOffset.set(
-          carX - Math.sin(h) * camDist,
-          carY + camHeight,
-          carZ - Math.cos(h) * camDist
-        );
-        _camTarget.set(
-          carX + Math.sin(h) * 14,
-          carY + 1.2,
-          carZ + Math.cos(h) * 14
-        );
+      if (this.cameraView === 'hood') {
+        // --- COCKPIT / HOOD VIEW ---
+        if (isOW) {
+          const h = this.carController.headingAngle;
+          _idealOffset.set(
+            carX + Math.sin(h) * 0.7,
+            carY + 0.88,
+            carZ + Math.cos(h) * 0.7
+          );
+          _camTarget.set(
+            carX + Math.sin(h) * 28,
+            carY + 0.78,
+            carZ + Math.cos(h) * 28
+          );
+        } else {
+          _idealOffset.set(carX, carY + 0.88, carZ + 0.7);
+          _camTarget.set(carX, carY + 0.78, carZ + 28);
+        }
+      } else if (this.cameraView === 'topDown') {
+        // --- TOP-DOWN ARCADE CAMERA ---
+        _idealOffset.set(carX, carY + 22, carZ - 3);
+        _camTarget.set(carX, carY, carZ + 14);
       } else {
-        // Linear highway camera follow
-        const camHeight = 3.2 + (this.carController.isAirborne ? 1.0 : 0);
-        const camDist = 6.8 + speedNorm * 1.5;
-        _camTarget.set(carX, carY + 1.2, carZ + 12);
-        _idealOffset.set(
-          carX - this.carController.steerAngle * 1.5,
-          carY + camHeight,
-          carZ - camDist
-        );
+        // --- THIRD-PERSON CHASE (DEFAULT) ---
+        if (isOW) {
+          const camDist = 7.6 + speedNorm * 1.8;
+          const camHeight = 3.8 + (this.carController.isAirborne ? 1.5 : 0);
+          const h = this.carController.headingAngle;
+
+          _idealOffset.set(
+            carX - Math.sin(h) * camDist,
+            carY + camHeight,
+            carZ - Math.cos(h) * camDist
+          );
+          _camTarget.set(
+            carX + Math.sin(h) * 14,
+            carY + 1.2,
+            carZ + Math.cos(h) * 14
+          );
+        } else {
+          const camHeight = 3.2 + (this.carController.isAirborne ? 1.0 : 0);
+          const camDist = 6.8 + speedNorm * 1.5;
+          _camTarget.set(carX, carY + 1.2, carZ + 12);
+          _idealOffset.set(
+            carX - this.carController.steerAngle * 1.5,
+            carY + camHeight,
+            carZ - camDist
+          );
+        }
       }
 
-      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, _idealOffset.x, 9, dt);
-      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, _idealOffset.y, 9, dt);
-      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, _idealOffset.z, 14, dt);
+      const lerpSpeed = this.cameraView === 'hood' ? 24 : 10;
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, _idealOffset.x, lerpSpeed, dt);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, _idealOffset.y, lerpSpeed, dt);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, _idealOffset.z, lerpSpeed, dt);
 
-      // Dynamic FOV zoom during Nitro boost
-      const targetFov = this.carController.isNitroActive ? 75 : 60 + speedNorm * 6;
+      // FOV
+      const baseFov = this.cameraView === 'hood' ? 72 : this.cameraView === 'topDown' ? 50 : 60;
+      const targetFov = this.carController.isNitroActive ? baseFov + 14 : baseFov + speedNorm * 6;
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 6, dt);
       this.camera.updateProjectionMatrix();
 
@@ -511,7 +653,6 @@ export class GameEngine {
       this.particleSystem.update(dt);
     }
 
-    // Render Scene
     this.renderer.render(this.scene, this.camera);
   }
 

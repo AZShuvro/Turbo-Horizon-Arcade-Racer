@@ -525,6 +525,15 @@ export class OpenWorldManager {
     this.rootGroup.visible = visible;
   }
 
+  public reset() {
+    this.trophiesCollected = 0;
+    this.currentZone = 'city';
+    for (const d of this.discoveries) {
+      d.completed = false;
+      if (d.meshGroup) d.meshGroup.visible = true;
+    }
+  }
+
   public dispose() {
     this.scene.remove(this.rootGroup);
     this.colliders = [];

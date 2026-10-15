@@ -1,4 +1,4 @@
-import { CarStats, BiomeType, DecalType, TrackConfig } from '../types/game';
+import { CarStats, BiomeType, DecalType, TrackConfig, KeyBindings, Achievement } from '../types/game';
 
 export const CARS_CATALOG: CarStats[] = [
   {
@@ -14,6 +14,8 @@ export const CARS_CATALOG: CarStats[] = [
     trimColor: '#ffffff',
     decalType: 'dual_stripes',
     stripeColor: '#ffffff',
+    price: 0,
+    unlocked: true,
   },
   {
     id: 'viper',
@@ -28,6 +30,8 @@ export const CARS_CATALOG: CarStats[] = [
     trimColor: '#e4e4e7',
     decalType: 'center_stripe',
     stripeColor: '#facc15',
+    price: 450,
+    unlocked: false,
   },
   {
     id: 'cyber',
@@ -42,6 +46,8 @@ export const CARS_CATALOG: CarStats[] = [
     trimColor: '#facc15',
     decalType: 'side_arrows',
     stripeColor: '#38bdf8',
+    price: 900,
+    unlocked: false,
   },
   {
     id: 'formula',
@@ -56,6 +62,8 @@ export const CARS_CATALOG: CarStats[] = [
     trimColor: '#000000',
     decalType: 'dual_stripes',
     stripeColor: '#fef08a',
+    price: 1800,
+    unlocked: false,
   },
 ];
 
@@ -96,6 +104,8 @@ export const TRACKS_CATALOG: TrackConfig[] = [
     difficulty: 'Easy',
     biome: 'sunset',
     primaryCurvature: 'Gentle & Open',
+    price: 0,
+    unlocked: true,
   },
   {
     id: 'neon-circuit',
@@ -106,6 +116,8 @@ export const TRACKS_CATALOG: TrackConfig[] = [
     difficulty: 'Medium',
     biome: 'neon',
     primaryCurvature: 'Chicanes & Drifts',
+    price: 300,
+    unlocked: false,
   },
   {
     id: 'canyon-ridge',
@@ -116,6 +128,94 @@ export const TRACKS_CATALOG: TrackConfig[] = [
     difficulty: 'Expert',
     biome: 'desert',
     primaryCurvature: 'Elevation & Slaloms',
+    price: 650,
+    unlocked: false,
+  },
+];
+
+export const DEFAULT_KEYBINDINGS: KeyBindings = {
+  steerLeft: 'KeyA',
+  steerRight: 'KeyD',
+  throttle: 'KeyW',
+  brake: 'KeyS',
+  drift: 'Space',
+  nitro: 'KeyN',
+  clutch: 'AltLeft',
+  upshift: 'KeyE',
+  downshift: 'KeyQ',
+  headlights: 'KeyL',
+  indicatorLeft: 'BracketLeft',
+  indicatorRight: 'BracketRight',
+  hazardLights: 'KeyH',
+  doors: 'KeyO',
+  trunk: 'KeyP',
+  cameraToggle: 'KeyC',
+};
+
+export const INITIAL_ACHIEVEMENTS: Achievement[] = [
+  {
+    id: 'drift-pro',
+    title: 'Drift King',
+    description: 'Accumulate over 800 drift points in a single drift sequence',
+    icon: '🔥',
+    rewardCoins: 150,
+    unlocked: false,
+  },
+  {
+    id: 'speed-demon',
+    title: 'Speed Demon',
+    description: 'Break past 220 km/h top speed using Nitro Boost',
+    icon: '⚡',
+    rewardCoins: 200,
+    unlocked: false,
+  },
+  {
+    id: 'big-air',
+    title: 'Sky Diver',
+    description: 'Launch off a jump ramp for high airtime',
+    icon: '🚀',
+    rewardCoins: 100,
+    unlocked: false,
+  },
+  {
+    id: 'coin-rush',
+    title: 'Coin Hoarder',
+    description: 'Collect 25 coins in a single race session',
+    icon: '💰',
+    rewardCoins: 120,
+    unlocked: false,
+  },
+  {
+    id: 'close-call',
+    title: 'Near Miss Master',
+    description: 'Execute 5 near misses in a single race without crashing',
+    icon: '🎯',
+    rewardCoins: 180,
+    unlocked: false,
+  },
+  {
+    id: 'cop-evader',
+    title: 'Most Wanted',
+    description: 'Survive 30 seconds in Police Chase interception mode',
+    icon: '🚨',
+    rewardCoins: 250,
+    unlocked: false,
+  },
+  {
+    id: 'manual-driver',
+    title: 'Gearhead',
+    description: 'Engage Clutch and shift gears using Manual Transmission',
+    icon: '⚙️',
+    rewardCoins: 120,
+    unlocked: false,
+  },
+  {
+    id: 'magnet-master',
+    title: 'Magnetizer',
+    description: 'Grab a Magnet power-up and draw in 5 coins',
+    icon: '🧲',
+    rewardCoins: 100,
+    unlocked: false,
   },
 ];
 

@@ -478,6 +478,237 @@ class SoundManager {
     } catch {}
   }
 
+  // --- SFX: GEAR SHIFT (CLUNK / CLICK) ---
+  public playGearShift(success = true) {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      if (success) {
+        // Satisfying mechanical shifter clunk
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(45, now + 0.08);
+
+        gain.gain.setValueAtTime(0.35, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+        osc.connect(gain);
+        gain.connect(this.sfxGain);
+        osc.start(now);
+        osc.stop(now + 0.09);
+      } else {
+        // Harsh clutch grind noise (trying to shift without clutch!)
+        const buffer = this.createNoiseBuffer();
+        if (buffer) {
+          const noise = this.ctx.createBufferSource();
+          noise.buffer = buffer;
+          const filter = this.ctx.createBiquadFilter();
+          filter.type = 'bandpass';
+          filter.frequency.setValueAtTime(1200, now);
+          filter.Q.setValueAtTime(4, now);
+
+          const gain = this.ctx.createGain();
+          gain.gain.setValueAtTime(0.4, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+          noise.connect(filter);
+          filter.connect(gain);
+          gain.connect(this.sfxGain);
+          noise.start(now);
+          noise.stop(now + 0.25);
+        }
+      }
+    } catch {}
+  }
+
+  // --- SFX: BLINKER / INDICATOR TICK-TOCK ---
+  public playBlinker() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1800, now);
+      osc.frequency.exponentialRampToValueAtTime(600, now + 0.025);
+
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.03);
+    } catch {}
+  }
+
+  // --- SFX: POLICE SIREN YELP / WAIL ---
+  public playSiren() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(700, now);
+      osc.frequency.linearRampToValueAtTime(1250, now + 0.18);
+      osc.frequency.linearRampToValueAtTime(700, now + 0.36);
+
+      gain.gain.setValueAtTime(0.16, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.38);
+    } catch {}
+  }
+
+  // --- SFX: MAGNET POWER-UP ---
+  public playMagnetPickup() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(1100, now + 0.35);
+
+      gain.gain.setValueAtTime(0.28, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.38);
+    } catch {}
+  }
+
+  // --- SFX: SHIELD ACTIVATION & DEFLECT ---
+  public playShieldPickup() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.linearRampToValueAtTime(880, now + 0.2);
+
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } catch {}
+  }
+
+  public playShieldDeflect() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      // High energy deflection shockwave
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(900, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.25);
+
+      gain.gain.setValueAtTime(0.35, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.28);
+    } catch {}
+  }
+
+  // --- SFX: OIL SLICK SPLASH ---
+  public playOilSplash() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const buffer = this.createNoiseBuffer();
+      if (buffer) {
+        const now = this.ctx.currentTime;
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(600, now);
+        filter.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.sfxGain);
+        noise.start(now);
+        noise.stop(now + 0.35);
+      }
+    } catch {}
+  }
+
+  // --- SFX: DOOR / TRUNK TOGGLE CLICK ---
+  public playDoorToggle(isOpen: boolean) {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(isOpen ? 380 : 260, now);
+      osc.frequency.exponentialRampToValueAtTime(isOpen ? 650 : 120, now + 0.08);
+
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.09);
+    } catch {}
+  }
+
+  // --- SFX: ACHIEVEMENT UNLOCK FANFARE ---
+  public playAchievementUnlock() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain) return;
+    try {
+      const chord = [523.25, 659.25, 783.99, 1046.5, 1318.5]; // C Major triumph
+      chord.forEach((freq, idx) => {
+        const time = this.ctx!.currentTime + idx * 0.07;
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, time);
+
+        gain.gain.setValueAtTime(0.24, time);
+        gain.gain.exponentialRampToValueAtTime(0.001, time + 0.45);
+
+        osc.connect(gain);
+        gain.connect(this.sfxGain!);
+        osc.start(time);
+        osc.stop(time + 0.45);
+      });
+    } catch {}
+  }
+
   // --- PROCEDURAL SYNTH MUSIC LOOP ---
   public startMusic() {
     this.unlock();

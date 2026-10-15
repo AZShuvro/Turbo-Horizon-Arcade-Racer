@@ -6,9 +6,10 @@ interface PauseModalProps {
   onResume: () => void;
   onRestart: () => void;
   onHome: () => void;
+  onOpenSettings?: () => void;
 }
 
-export const PauseModal: React.FC<PauseModalProps> = ({ onResume, onRestart, onHome }) => {
+export const PauseModal: React.FC<PauseModalProps> = ({ onResume, onRestart, onHome, onOpenSettings }) => {
   const [muted, setMuted] = React.useState(soundManager.getMuted());
   const [musicOn, setMusicOn] = React.useState(soundManager.isMusicOn());
 
@@ -72,6 +73,15 @@ export const PauseModal: React.FC<PauseModalProps> = ({ onResume, onRestart, onH
             <RotateCcw className="w-4 h-4" />
             <span>RESTART</span>
           </button>
+
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="w-full py-2.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-amber-300 font-bold text-xs tracking-wider rounded-xl transition-colors flex items-center justify-center gap-2 font-['Chakra_Petch',sans-serif] cursor-pointer"
+            >
+              <span>SETTINGS & CONTROLS</span>
+            </button>
+          )}
 
           <button
             onClick={onHome}

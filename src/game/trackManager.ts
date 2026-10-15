@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BiomeType, TrafficCar, PickupItem, TrackId } from '../types/game';
+import { BiomeType, TrafficCar, PickupItem, TrackId, WeatherType, GameMode } from '../types/game';
 import {
   createTrafficVehicle,
   createPalmTree,
@@ -10,6 +10,11 @@ import {
   createCyberGate,
   createCanyonPillar,
   createCactus,
+  createMagnetPickup,
+  createShieldPickup,
+  createOilSlick,
+  createRoadBarricade,
+  createTrafficCone,
 } from './proceduralModels';
 
 const ROAD_WIDTH = 14;
@@ -120,6 +125,20 @@ export class TrackManager {
       this.terrainMat.color.setHex(0x15803d);
       this.roadMat.color.setHex(0x18181b);
       this.stripeMat.color.setHex(0xfacc15);
+    }
+  }
+
+  public setWeather(weather: WeatherType) {
+    if (weather === 'rain') {
+      // Wet slick asphalt with high specular sheen and reflections
+      this.roadMat.roughness = 0.15;
+      this.roadMat.metalness = 0.75;
+      this.roadMat.color.setHex(0x0a0a0c);
+    } else {
+      // Dry asphalt
+      this.roadMat.roughness = 0.85;
+      this.roadMat.metalness = 0.1;
+      this.applyTrackTheme(this.currentTrack);
     }
   }
 
@@ -295,7 +314,7 @@ export class TrackManager {
     }
   }
 
-  // Pool of coins, nitro tanks, and jump ramps
+  // Pool of coins, nitro tanks, jump ramps, powerups, and hazards
   private initPickupPool() {
     // 30 Coins
     for (let i = 0; i < 30; i++) {
@@ -329,7 +348,7 @@ export class TrackManager {
       });
     }
 
-    // 6 Jump Ramps (for big air and chicane hops!)
+    // 6 Jump Ramps
     for (let i = 0; i < 6; i++) {
       const rampMesh = createJumpRamp();
       rampMesh.position.set(0, -50, 0);
@@ -344,6 +363,70 @@ export class TrackManager {
         rotation: 0,
       });
     }
+
+    // 6 Magnet Power-ups
+    for (let i = 0; i < 6; i++) {
+      const magnetMesh = createMagnetPickup();
+      magnetMesh.position.set(0, -50, 0);
+      this.scene.add(magnetMesh);
+      this.pickups.push({
+        id: 44 + i,
+        type: 'magnet',
+        x: 0,
+        z: -100,
+        active: false,
+        meshGroup: magnetMesh,
+        rotation: 0,
+      });
+    }
+
+    // 4 Shield Guards
+    for (let i = 0; i < 4; i++) {
+      const shieldMesh = createShieldPickup();
+      shieldMesh.position.set(0, -50, 0);
+      this.scene.add(shieldMesh);
+      this.pickups.push({
+        id: 50 + i,
+        type: 'shield',
+        x: 0,
+        z: -100,
+        active: false,
+        meshGroup: shieldMesh,
+        rotation: 0,
+      });
+    }
+
+    // 8 Road Hazards: Oil Slicks
+    for (let i = 0; i < 8; i++) {
+      const oilMesh = createOilSlick();
+      oilMesh.position.set(0, -50, 0);
+      this.scene.add(oilMesh);
+      this.pickups.push({
+        id: 54 + i,
+        type: 'oil',
+        x: 0,
+        z: -100,
+        active: false,
+        meshGroup: oilMesh,
+        rotation: 0,
+      });
+    }
+
+    // 6 Road Hazards: Construction Barricades
+    for (let i = 0; i < 6; i++) {
+      const barMesh = createRoadBarricade();
+      barMesh.position.set(0, -50, 0);
+      this.scene.add(barMesh);
+      this.pickups.push({
+        id: 62 + i,
+        type: 'barricade',
+        x: 0,
+        z: -100,
+        active: false,
+        meshGroup: barMesh,
+        rotation: 0,
+      });
+    }
   }
 
   public spawnCheckpointAt(z: number) {
@@ -353,7 +436,13 @@ export class TrackManager {
     this.checkpoints.push(arch);
   }
 
-  public update(playerZ: number, dt: number) {
+  public update(
+    playerZ: number,
+    dt: number,
+    playerX = 0,
+    playerSpeed = 0,
+    isPoliceChase = false
+  ) {
     // 1. Recycle road chunks that fall behind player
     for (const chunk of this.roadChunks) {
       if (chunk.position.z < playerZ - CHUNK_LENGTH * 2.5) {
@@ -365,7 +454,7 @@ export class TrackManager {
         this.chunkIndex++;
 
         // Spawn traffic or items ahead
-        this.maybeSpawnEntitiesAhead(newZ);
+        this.maybeSpawnEntitiesAhead(newZ, isPoliceChase);
 
         // Checkpoint spawn every 700m
         if (newZ >= this.nextCheckpointDistance) {
@@ -375,24 +464,60 @@ export class TrackManager {
       }
     }
 
-    // 2. Update traffic movement & cop lights
+    // 2. Update traffic movement, police interception AI & lights
     for (const car of this.traffic) {
       if (car.active) {
-        car.z += car.speed * dt;
-        car.x = this.getCurvatureAt(car.z) + LANES[car.lane];
+        const isCop = car.type === 'cop';
+
+        if (isCop && isPoliceChase) {
+          // --- POLICE CHASE INTERCEPTION AI ---
+          const dz = car.z - playerZ;
+          const roadCenter = this.getCurvatureAt(car.z);
+          const targetX = playerX; // match player lateral position
+
+          if (dz < 0 && dz > -100) {
+            // Cop behind player: Surge forward to catch up and intercept!
+            car.speed = Math.max(playerSpeed + 8, 32);
+            car.z += car.speed * dt;
+            // Steer toward player lateral lane
+            car.x = THREE.MathUtils.damp(car.x, targetX, 2.5, dt);
+          } else if (dz >= 0 && dz < 70) {
+            // Cop ahead of player: Swerve aggressively into player's path to roadblock/box in!
+            car.speed = Math.max(16, playerSpeed * 0.94);
+            car.z += car.speed * dt;
+            car.x = THREE.MathUtils.damp(car.x, targetX, 3.2, dt);
+          } else {
+            // Standard cruise
+            car.z += car.speed * dt;
+            car.x = roadCenter + LANES[car.lane];
+          }
+
+          // Orient car toward forward motion
+          const nextZ = car.z + 4;
+          const nextCurve = this.getCurvatureAt(nextZ) + (car.x - roadCenter);
+          car.meshGroup.rotation.y = Math.atan2(nextCurve - car.x, 4);
+
+        } else {
+          // Standard civilian traffic flow
+          car.z += car.speed * dt;
+          car.x = this.getCurvatureAt(car.z) + LANES[car.lane];
+
+          const nextCurve = this.getCurvatureAt(car.z + 5) + LANES[car.lane];
+          const angle = Math.atan2(nextCurve - car.x, 5);
+          car.meshGroup.rotation.y = angle;
+        }
+
         car.meshGroup.position.set(car.x, 0, car.z);
 
-        const nextCurve = this.getCurvatureAt(car.z + 5) + LANES[car.lane];
-        const angle = Math.atan2(nextCurve - car.x, 5);
-        car.meshGroup.rotation.y = angle;
-
-        if (car.type === 'cop' && (car.meshGroup as any).userData?.redLight) {
-          const flash = Math.sin(Date.now() * 0.015) > 0;
+        // Flashing Cop Siren Lights
+        if (isCop && (car.meshGroup as any).userData?.redLight) {
+          const flash = Math.sin(Date.now() * 0.02) > 0;
           (car.meshGroup as any).userData.redLight.visible = flash;
           (car.meshGroup as any).userData.blueLight.visible = !flash;
         }
 
-        if (car.z < playerZ - 30 || car.z > playerZ + 550) {
+        // Despawn bounds
+        if (car.z < playerZ - 35 || car.z > playerZ + 550) {
           car.active = false;
           car.meshGroup.visible = false;
           car.meshGroup.position.set(0, -50, 0);
@@ -400,14 +525,15 @@ export class TrackManager {
       }
     }
 
-    // 3. Update pickups
+    // 3. Update pickups & hazards
     for (const item of this.pickups) {
       if (item.active) {
-        item.rotation += dt * 3.5;
-        item.meshGroup.rotation.y = item.rotation;
-
-        if (item.type === 'coin') {
-          item.meshGroup.position.y = 1.0 + Math.sin(item.rotation * 1.5) * 0.2;
+        if (item.type === 'coin' || item.type === 'nitro' || item.type === 'magnet' || item.type === 'shield') {
+          item.rotation += dt * 3.5;
+          item.meshGroup.rotation.y = item.rotation;
+          if (item.type === 'coin' || item.type === 'magnet' || item.type === 'shield') {
+            item.meshGroup.position.y = 1.0 + Math.sin(item.rotation * 1.5) * 0.2;
+          }
         }
 
         if (item.z < playerZ - 20) {
@@ -428,12 +554,27 @@ export class TrackManager {
     }
   }
 
-  private maybeSpawnEntitiesAhead(z: number) {
-    if (Math.random() < 0.45) {
-      const availableCar = this.traffic.find((c) => !c.active);
+  private maybeSpawnEntitiesAhead(z: number, isPoliceChase = false) {
+    // 1. Traffic Vehicle Spawning
+    const trafficSpawnChance = isPoliceChase ? 0.6 : 0.45;
+    if (Math.random() < trafficSpawnChance) {
+      // In Police Chase, prioritize cop cruisers!
+      let availableCar: TrafficCar | undefined;
+      if (isPoliceChase && Math.random() < 0.65) {
+        availableCar = this.traffic.find((c) => c.type === 'cop' && !c.active);
+      }
+      if (!availableCar) {
+        availableCar = this.traffic.find((c) => !c.active);
+      }
+
       if (availableCar) {
         availableCar.active = true;
-        availableCar.z = z + Math.random() * 20;
+        // In police chase, some cops spawn behind to pursue from the rear!
+        if (isPoliceChase && availableCar.type === 'cop' && Math.random() < 0.4) {
+          availableCar.z = z - 70; // spawn behind player
+        } else {
+          availableCar.z = z + Math.random() * 25;
+        }
         availableCar.lane = Math.floor(Math.random() * 3);
         availableCar.x = this.getCurvatureAt(availableCar.z) + LANES[availableCar.lane];
         availableCar.meshGroup.visible = true;
@@ -441,8 +582,10 @@ export class TrackManager {
       }
     }
 
+    // 2. Pickups & Hazards Spawning
     const roll = Math.random();
-    if (roll < 0.35) {
+    if (roll < 0.3) {
+      // Coins line (3 in sequence)
       const lane = Math.floor(Math.random() * 3);
       for (let i = 0; i < 3; i++) {
         const coin = this.pickups.find((p) => p.type === 'coin' && !p.active);
@@ -454,7 +597,8 @@ export class TrackManager {
           coin.meshGroup.position.set(coin.x, 1.0, coin.z);
         }
       }
-    } else if (roll < 0.52) {
+    } else if (roll < 0.44) {
+      // Nitro boost cell
       const nitro = this.pickups.find((p) => p.type === 'nitro' && !p.active);
       if (nitro) {
         const lane = Math.floor(Math.random() * 3);
@@ -464,8 +608,52 @@ export class TrackManager {
         nitro.meshGroup.visible = true;
         nitro.meshGroup.position.set(nitro.x, 1.1, nitro.z);
       }
-    } else if (roll < (this.currentTrack === 'canyon-ridge' ? 0.75 : 0.62)) {
-      // More jump ramps in Canyon Ridge!
+    } else if (roll < 0.54) {
+      // Magnet Power-up!
+      const magnet = this.pickups.find((p) => p.type === 'magnet' && !p.active);
+      if (magnet) {
+        const lane = Math.floor(Math.random() * 3);
+        magnet.active = true;
+        magnet.z = z + 12;
+        magnet.x = this.getCurvatureAt(magnet.z) + LANES[lane];
+        magnet.meshGroup.visible = true;
+        magnet.meshGroup.position.set(magnet.x, 1.1, magnet.z);
+      }
+    } else if (roll < 0.62) {
+      // Shield Guard Power-up!
+      const shield = this.pickups.find((p) => p.type === 'shield' && !p.active);
+      if (shield) {
+        const lane = Math.floor(Math.random() * 3);
+        shield.active = true;
+        shield.z = z + 15;
+        shield.x = this.getCurvatureAt(shield.z) + LANES[lane];
+        shield.meshGroup.visible = true;
+        shield.meshGroup.position.set(shield.x, 1.1, shield.z);
+      }
+    } else if (roll < 0.73) {
+      // Road Hazard: Oil Slick!
+      const oil = this.pickups.find((p) => p.type === 'oil' && !p.active);
+      if (oil) {
+        const lane = Math.floor(Math.random() * 3);
+        oil.active = true;
+        oil.z = z + 14;
+        oil.x = this.getCurvatureAt(oil.z) + LANES[lane];
+        oil.meshGroup.visible = true;
+        oil.meshGroup.position.set(oil.x, 0.03, oil.z);
+      }
+    } else if (roll < 0.82) {
+      // Road Hazard: Construction Barricade!
+      const bar = this.pickups.find((p) => p.type === 'barricade' && !p.active);
+      if (bar) {
+        const lane = Math.floor(Math.random() * 3);
+        bar.active = true;
+        bar.z = z + 18;
+        bar.x = this.getCurvatureAt(bar.z) + LANES[lane];
+        bar.meshGroup.visible = true;
+        bar.meshGroup.position.set(bar.x, 0, bar.z);
+      }
+    } else if (roll < (this.currentTrack === 'canyon-ridge' ? 0.95 : 0.89)) {
+      // Jump ramp!
       const ramp = this.pickups.find((p) => p.type === 'ramp' && !p.active);
       if (ramp) {
         const lane = Math.floor(Math.random() * 3);

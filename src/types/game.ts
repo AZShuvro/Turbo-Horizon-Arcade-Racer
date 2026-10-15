@@ -1,8 +1,14 @@
 export type GameState = 'title' | 'playing' | 'paused' | 'gameover';
 
-export type GameMode = 'arcade' | 'timeAttack' | 'zen' | 'openWorld';
+export type GameMode = 'arcade' | 'timeAttack' | 'zen' | 'openWorld' | 'policeChase';
 
 export type WorldZone = 'city' | 'beach' | 'mountains';
+
+export type CameraView = 'thirdPerson' | 'hood' | 'topDown';
+
+export type WeatherType = 'sunny' | 'sunset' | 'night' | 'rain';
+
+export type TransmissionType = 'automatic' | 'manual';
 
 export interface DiscoveryItem {
   id: string;
@@ -30,6 +36,8 @@ export interface TrackConfig {
   difficulty: 'Easy' | 'Medium' | 'Expert';
   biome: BiomeType;
   primaryCurvature: string;
+  price: number;
+  unlocked: boolean;
 }
 
 export interface CarStats {
@@ -45,6 +53,27 @@ export interface CarStats {
   trimColor: string;
   decalType: DecalType;
   stripeColor: string;
+  price: number;
+  unlocked: boolean;
+}
+
+export interface KeyBindings {
+  steerLeft: string;
+  steerRight: string;
+  throttle: string;
+  brake: string;
+  drift: string;
+  nitro: string;
+  clutch: string;
+  upshift: string;
+  downshift: string;
+  headlights: string;
+  indicatorLeft: string;
+  indicatorRight: string;
+  hazardLights: string;
+  doors: string;
+  trunk: string;
+  cameraToggle: string;
 }
 
 export interface PlayerInput {
@@ -54,6 +83,9 @@ export interface PlayerInput {
   right: boolean;
   drift: boolean;
   nitro: boolean;
+  clutch: boolean;
+  upshiftJustPressed: boolean;
+  downshiftJustPressed: boolean;
 }
 
 export interface TrafficCar {
@@ -68,11 +100,12 @@ export interface TrafficCar {
   meshGroup: any; // THREE.Group
   width: number;
   length: number;
+  isChaser?: boolean;
 }
 
 export interface PickupItem {
   id: number;
-  type: 'coin' | 'nitro' | 'shield' | 'ramp';
+  type: 'coin' | 'nitro' | 'shield' | 'ramp' | 'magnet' | 'oil' | 'barricade';
   x: number;
   z: number;
   active: boolean;
@@ -83,7 +116,7 @@ export interface PickupItem {
 export interface FloatingText {
   id: number;
   text: string;
-  type: 'nearMiss' | 'drift' | 'checkpoint' | 'combo' | 'nitro';
+  type: 'nearMiss' | 'drift' | 'checkpoint' | 'combo' | 'nitro' | 'achievement' | 'powerup' | 'hazard' | 'police';
   score: number;
   timestamp: number;
 }
@@ -93,12 +126,30 @@ export interface GameScore {
   highScore: number;
   distance: number;
   coins: number;
+  totalCoins: number;
   nearMisses: number;
   maxDriftScore: number;
   speed: number;
   nitro: number; // 0 to 100
   timeLeft: number;
   shield: boolean;
+}
+
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  rewardCoins: number;
+  unlocked: boolean;
+}
+
+export interface GameSettings {
+  transmission: TransmissionType;
+  cameraView: CameraView;
+  weather: WeatherType;
+  quality: GraphicsQuality;
+  keyBindings: KeyBindings;
 }
 
 export type BiomeType = 'sunset' | 'neon' | 'desert' | 'alpine';
