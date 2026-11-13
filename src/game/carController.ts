@@ -1,10 +1,15 @@
 import * as THREE from 'three';
-import { CarStats, PlayerInput, FloatingText, TransmissionType } from '../types/game';
+import { CarStats, PlayerInput, FloatingText, TransmissionType, CarUpgrades } from '../types/game';
 import { soundManager } from '../audio/soundManager';
 import { ParticleSystem } from './particleSystem';
 import { TrackManager } from './trackManager';
 import { OpenWorldManager } from './OpenWorldManager';
 import { createShieldBubble } from './proceduralModels';
+import {
+  OPEN_WORLD_RAMPS,
+  WORLD_HALF_EXTENT,
+  getWorldHeightAt,
+} from './openWorldData';
 
 const GEAR_SPEED_LIMITS = [
   0,     // 0: Neutral / Stop
@@ -19,10 +24,12 @@ const GEAR_SPEED_LIMITS = [
 export class CarController {
   public mesh: THREE.Group;
   public stats: CarStats;
+  public upgrades: CarUpgrades = { engine: 0, handling: 0, nitro: 0 };
   private particleSystem: ParticleSystem;
   private trackManager: TrackManager;
   public openWorldManager?: OpenWorldManager;
   public isOpenWorld = false;
+
   public headingAngle = 0; // 360 degree free-roam heading in radians
 
   // Car kinematics state
@@ -106,9 +113,15 @@ export class CarController {
   public setCar(mesh: THREE.Group, stats: CarStats) {
     this.mesh = mesh;
     this.stats = stats;
-    this.maxSpeed = 38 + stats.topSpeed * 0.35;
+    this.maxSpeed = 38 + (stats.topSpeed + this.upgrades.engine * 6) * 0.35;
     this.initShieldBubble();
   }
+
+  public setUpgrades(upgrades: CarUpgrades) {
+    this.upgrades = upgrades;
+    this.maxSpeed = 38 + (this.stats.topSpeed + upgrades.engine * 6) * 0.35;
+  }
+
 
   // Toggle Headlights
   public toggleHeadlights(): boolean {
@@ -202,12 +215,16 @@ export class CarController {
       if (this.currentGear > 1) {
         this.currentGear--;
         soundManager.playGearShift(true);
+        soundManager.playExhaustPop();
+        // Emit flame backfire from exhaust tips
+        this.particleSystem.emitNitroFlame(this.x - 0.5, this.y + 0.35, this.z - 1.8);
+        this.particleSystem.emitNitroFlame(this.x + 0.5, this.y + 0.35, this.z - 1.8);
         this.onAchievementTrigger?.('manual-driver');
         this.onFloatingText?.({
           id: Date.now(),
-          text: `GEAR SHIFT: ${this.currentGear}`,
+          text: `💥 DOWNSHIFT: GEAR ${this.currentGear}`,
           type: 'powerup',
-          score: 50,
+          score: 60,
           timestamp: Date.now(),
         });
       }
@@ -284,20 +301,25 @@ export class CarController {
     }
 
     // 1. Throttle & Acceleration
-    const accelRate = 22 * (0.8 + this.stats.acceleration * 0.4);
+    const accelRate = 22 * (0.8 + this.stats.acceleration * 0.4) * (1 + this.upgrades.engine * 0.08);
     const brakeRate = 35;
     const drag = 6.5;
 
-    // Nitro logic
+    // Nitro logic with upgraded max capacity and recharge rate
+    const maxNitro = 100 + this.upgrades.nitro * 15;
     this.isNitroActive = input.nitro && this.nitroAmount > 0 && this.speed > 5;
     if (this.isNitroActive) {
       this.nitroAmount = Math.max(0, this.nitroAmount - 32 * clampedDt);
       this.speed += accelRate * 1.6 * clampedDt;
     } else {
-      if (this.nitroAmount < 100) {
-        this.nitroAmount = Math.min(100, this.nitroAmount + 4 * this.stats.nitroRecharge * clampedDt);
+      if (this.nitroAmount < maxNitro) {
+        this.nitroAmount = Math.min(
+          maxNitro,
+          this.nitroAmount + 4 * this.stats.nitroRecharge * (1 + this.upgrades.nitro * 0.15) * clampedDt
+        );
       }
     }
+
 
     // Determine current gear top speed limit
     let currentMaxSpeed = this.maxSpeed;
@@ -340,7 +362,7 @@ export class CarController {
 
     // 2. Steering & Drifting
     const speedFactor = Math.min(1.0, Math.abs(this.speed) / 15);
-    let steerSensitivity = 1.6 * (0.8 + this.stats.handling * 0.4);
+    let steerSensitivity = 1.6 * (0.8 + this.stats.handling * 0.4) * (1 + this.upgrades.handling * 0.08);
 
     // Degrade steering control during Oil Slick hazard
     if (this.oilSpinTimer > 0) {
@@ -406,7 +428,7 @@ export class CarController {
       this.z += vz * clampedDt;
 
       if (this.openWorldManager) {
-        const col = this.openWorldManager.checkBuildingCollision(this.x, this.z, 2.0);
+        const col = this.openWorldManager.checkBuildingCollision(this.x, this.z, this.y, 2.0);
         if (col.hit) {
           if (this.hasShield) {
             this.hasShield = false;
@@ -429,8 +451,8 @@ export class CarController {
         }
       }
 
-      this.x = Math.max(-560, Math.min(560, this.x));
-      this.z = Math.max(-560, Math.min(560, this.z));
+      this.x = Math.max(-WORLD_HALF_EXTENT, Math.min(WORLD_HALF_EXTENT, this.x));
+      this.z = Math.max(-WORLD_HALF_EXTENT, Math.min(WORLD_HALF_EXTENT, this.z));
 
     } else {
       // Linear highway track driving
@@ -458,26 +480,53 @@ export class CarController {
       this.particleSystem.emitNitroFlame(this.x + 0.45, this.y + 0.25, this.z - 2.0);
     }
 
-    // 5. Airborne Physics & Jump Ramps
+    // 5. Airborne Physics, Elevation & Stunt Jump Ramps
+    const groundY = this.isOpenWorld ? getWorldHeightAt(this.x, this.z, this.y) : 0;
+
+    if (this.isOpenWorld && !this.isAirborne && this.speed > 26) {
+      for (let i = 0; i < OPEN_WORLD_RAMPS.length; i++) {
+        const r = OPEN_WORLD_RAMPS[i];
+        const dx = this.x - r.x;
+        const dz = this.z - r.z;
+        const cos = Math.cos(-r.rotY);
+        const sin = Math.sin(-r.rotY);
+        const lx = dx * cos - dz * sin;
+        const lz = dx * sin + dz * cos;
+        if (Math.abs(lx) < r.width * 0.52 && lz > r.length * 0.25 && lz < r.length * 0.55) {
+          this.isAirborne = true;
+          this.vy = Math.min(18, 9.5 + (this.speed - 25) * 0.22);
+          soundManager.playJump();
+          this.onAchievementTrigger?.('big-air');
+          this.openWorldManager?.onActivityReward?.({
+            title: `STUNT JUMP: ${r.name.toUpperCase()}`,
+            coins: 65,
+            score: 900,
+            kind: 'ramp',
+          });
+          break;
+        }
+      }
+    }
+
     if (this.isAirborne) {
       this.y += this.vy * clampedDt;
-      this.vy -= 28 * clampedDt; // Gravity
+      this.vy -= 26 * clampedDt; // Gravity
 
       this.pitch = THREE.MathUtils.damp(this.pitch, 0.25, 4, clampedDt);
       this.roll = THREE.MathUtils.damp(this.roll, steerTarget * 0.35, 6, clampedDt);
 
-      if (this.y <= 0) {
-        this.y = 0;
+      if (this.y <= groundY) {
+        this.y = groundY;
         this.vy = 0;
         this.isAirborne = false;
         this.pitch = 0;
         this.roll = 0;
         soundManager.playCrash();
-        this.particleSystem.emitTireSmoke(this.x - 0.9, 0, this.z - 1.2);
-        this.particleSystem.emitTireSmoke(this.x + 0.9, 0, this.z - 1.2);
+        this.particleSystem.emitTireSmoke(this.x - 0.9, groundY, this.z - 1.2);
+        this.particleSystem.emitTireSmoke(this.x + 0.9, groundY, this.z - 1.2);
       }
     } else {
-      this.y = 0;
+      this.y = THREE.MathUtils.damp(this.y, groundY, 18, clampedDt);
       this.pitch = -input.forward ? 0.03 : input.backward ? -0.04 : 0;
       this.roll = THREE.MathUtils.damp(this.roll, -this.steerAngle * 0.15, 10, clampedDt);
     }
@@ -501,8 +550,10 @@ export class CarController {
       }
     }
 
-    // 7. Track Specific Collisions (only when not in open world mode)
-    if (!this.isOpenWorld) {
+    // 7. Collisions & Pickups
+    if (this.isOpenWorld) {
+      this.checkOpenWorldTrafficCollisions();
+    } else {
       this.checkTrafficCollisions();
       this.checkPickups();
       this.checkCheckpoints();
@@ -595,6 +646,52 @@ export class CarController {
 
     if (ud.trunk) {
       ud.trunk.rotation.x = this.trunkAngle;
+    }
+  }
+
+  private checkOpenWorldTrafficCollisions() {
+    if (!this.openWorldManager || this.invulnerableTimer > 0) return;
+
+    const pools = [this.openWorldManager.trafficPool, this.openWorldManager.policePool];
+    for (let pIdx = 0; pIdx < pools.length; pIdx++) {
+      const pool = pools[pIdx];
+      for (let i = 0; i < pool.length; i++) {
+        const c = pool[i].car;
+        if (!c.active) continue;
+        const dy = Math.abs(this.y - c.meshGroup.position.y);
+        if (dy > 2.5) continue;
+        const dx = this.x - c.x;
+        const dz = this.z - c.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < 9.5) {
+          if (this.hasShield) {
+            this.hasShield = false;
+            this.invulnerableTimer = 1.0;
+            soundManager.playShieldDeflect();
+            this.particleSystem.emitCrashSparks(this.x, this.y + 0.5, this.z, 35);
+            this.onFloatingText?.({
+              id: Date.now(),
+              text: 'SHIELD DEFLECTED TRAFFIC!',
+              type: 'powerup',
+              score: 250,
+              timestamp: Date.now(),
+            });
+          } else {
+            this.handleCrash(c);
+          }
+          return;
+        } else if (distSq < 25 && !this.passedCars.has(c.id) && this.speed > 26) {
+          this.passedCars.add(c.id);
+          soundManager.playNearMiss();
+          this.onFloatingText?.({
+            id: Date.now(),
+            text: 'NEAR MISS! +200',
+            type: 'nearMiss',
+            score: 200,
+            timestamp: Date.now(),
+          });
+        }
+      }
     }
   }
 

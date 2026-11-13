@@ -15,14 +15,19 @@ import {
   Settings,
   Lock,
   ShieldAlert,
+  User,
+  Users,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
-import { CarStats, GameMode, GraphicsQuality, TrackId } from '../types/game';
+import { CarStats, GameMode, GraphicsQuality, TrackId, CarUpgrades, PlayerProfile } from '../types/game';
 import {
   CARS_CATALOG,
   COLOR_PALETTES,
   DECAL_OPTIONS,
   STRIPE_COLOR_PALETTES,
   TRACKS_CATALOG,
+  UPGRADE_CONFIG,
 } from '../data/cars';
 import { soundManager } from '../audio/soundManager';
 
@@ -35,6 +40,8 @@ interface TitleScreenProps {
   totalCoins: number;
   unlockedCars: string[];
   unlockedTracks: string[];
+  carUpgrades: CarUpgrades;
+  onBuyUpgrade: (category: 'engine' | 'handling' | 'nitro') => boolean;
   onSelectCar: (car: CarStats) => void;
   onUpdateCarCustomization: (updates: Partial<CarStats>) => void;
   onSelectTrack: (trackId: TrackId) => void;
@@ -44,7 +51,16 @@ interface TitleScreenProps {
   onUnlockTrack: (trackId: TrackId, price: number) => boolean;
   onOpenSettings: () => void;
   onStartGame: () => void;
+  profile: PlayerProfile;
+  onlineRoomCode?: string | null;
+  onOpenProfile: () => void;
+  onOpenMultiplayer: () => void;
+  isMobileDevice?: boolean;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+  onStartFullscreenRace?: () => void;
 }
+
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
   currentCar,
@@ -55,6 +71,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   totalCoins,
   unlockedCars,
   unlockedTracks,
+  carUpgrades,
+  onBuyUpgrade,
   onSelectCar,
   onUpdateCarCustomization,
   onSelectTrack,
@@ -64,9 +82,18 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onUnlockTrack,
   onOpenSettings,
   onStartGame,
+  profile,
+  onlineRoomCode,
+  onOpenProfile,
+  onOpenMultiplayer,
+  isMobileDevice = false,
+  isFullscreen = false,
+  onToggleFullscreen,
+  onStartFullscreenRace,
 }) => {
   const [drawerOpen, setDrawerOpen] = useState<'customizer' | 'tracks' | null>(null);
-  const [customizerSubTab, setCustomizerSubTab] = useState<'paint' | 'stripes' | 'cars'>('paint');
+  const [customizerSubTab, setCustomizerSubTab] = useState<'paint' | 'stripes' | 'cars' | 'upgrades'>('paint');
+
 
   const [muted, setMuted] = useState(soundManager.getMuted());
   const [musicOn, setMusicOn] = useState(soundManager.isMusicOn());
@@ -84,18 +111,18 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   const activeTrackObj = TRACKS_CATALOG.find((t) => t.id === selectedTrack) || TRACKS_CATALOG[0];
 
   return (
-    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-5 md:p-8 select-none z-20 font-sans">
+    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-3 sm:p-5 md:p-8 select-none z-20 font-sans">
       {/* 1. TOP HEADER: Clean minimalist luxury branding & settings */}
-      <div className="flex items-start justify-between w-full pointer-events-auto">
+      <div className="flex flex-wrap items-start justify-between gap-2 w-full pointer-events-auto">
         {/* Title Lockup */}
         <div className="flex flex-col">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <div className="w-2.5 h-6 bg-amber-500 rounded-sm" />
-            <h1 className="text-2xl md:text-3xl font-black tracking-widest text-white font-['Chakra_Petch',sans-serif] uppercase">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-black tracking-widest text-white font-['Chakra_Petch',sans-serif] uppercase">
               TURBO HORIZON
             </h1>
           </div>
-          <div className="flex items-center gap-3 mt-1 text-[11px] font-mono text-zinc-400">
+          <div className="flex items-center gap-2 sm:gap-3 mt-1 text-[10px] sm:text-[11px] font-mono text-zinc-400">
             <span>LOW-POLY ARCADE RACING</span>
             {highScore > 0 && (
               <>
@@ -109,9 +136,23 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         </div>
 
         {/* Top-Right Settings Bar */}
-        <div className="flex items-center gap-2 bg-zinc-950/80 border border-zinc-800/80 rounded-full px-3 py-1.5 shadow-sm">
-          {/* Coin balance pill */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-xs font-mono font-bold text-amber-400">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 bg-zinc-950/80 border border-zinc-800/80 rounded-2xl sm:rounded-full px-2.5 sm:px-3 py-1.5 shadow-sm max-w-full">
+          {/* Driver Profile Button */}
+          <button
+            onClick={onOpenProfile}
+            className="flex items-center gap-2 px-3 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 hover:border-amber-400 rounded-full text-xs font-mono font-bold text-white transition-colors cursor-pointer"
+            title="Edit Driver Username & Profile"
+          >
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ backgroundColor: profile.tagColor }}
+            />
+            <User className="w-3.5 h-3.5 text-amber-400" />
+            <span className="max-w-[110px] truncate">{profile.username}</span>
+          </button>
+
+          {/* Coin balance */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono font-bold text-amber-400">
             <Coins className="w-3.5 h-3.5 fill-current" />
             <span>{totalCoins.toLocaleString()}</span>
           </div>
@@ -161,21 +202,43 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           >
             <Settings className="w-4 h-4" />
           </button>
+
+          {/* Fullscreen Toggle */}
+          {onToggleFullscreen && (
+            <button
+              onClick={onToggleFullscreen}
+              className="p-1.5 rounded-full text-zinc-300 hover:text-amber-400 transition-colors cursor-pointer"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen (Landscape)'}
+              aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          )}
         </div>
       </div>
 
-      {/* 2. HERO CAR BADGE (Unobtrusive floating pill above controls) */}
-      <div className="w-full flex justify-center pointer-events-auto">
-        <div className="bg-zinc-950/70 border border-zinc-800/80 rounded-full px-5 py-2 flex items-center gap-4 text-xs font-mono shadow-lg">
-          <span className="font-bold font-['Chakra_Petch',sans-serif] text-sm text-white">
+      {/* 2. HERO CAR BADGE & MOBILE FULLSCREEN PROMPT */}
+      <div className="w-full flex flex-col items-center gap-3 pointer-events-auto">
+        {isMobileDevice && !isFullscreen && onToggleFullscreen && (
+          <button
+            onClick={onToggleFullscreen}
+            className="px-5 py-3 bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-zinc-950 font-black text-xs sm:text-sm tracking-wider rounded-2xl shadow-[0_0_24px_rgba(6,182,212,0.45)] flex items-center gap-2.5 font-['Chakra_Petch',sans-serif] cursor-pointer transition-all min-h-[44px]"
+          >
+            <Maximize2 className="w-4 h-4 shrink-0" />
+            <span>PLAY IN FULLSCREEN (LANDSCAPE)</span>
+          </button>
+        )}
+
+        <div className="bg-zinc-950/70 border border-zinc-800/80 rounded-full px-4 sm:px-5 py-1.5 sm:py-2 flex items-center gap-3 sm:gap-4 text-[11px] sm:text-xs font-mono shadow-lg max-w-full overflow-hidden">
+          <span className="font-bold font-['Chakra_Petch',sans-serif] text-xs sm:text-sm text-white truncate">
             {currentCar.name}
           </span>
           <span className="text-zinc-500">|</span>
-          <span className="text-zinc-300">
-            {Math.round(currentCar.topSpeed * 2.5)} KM/H Top Speed
+          <span className="text-zinc-300 whitespace-nowrap">
+            {Math.round(currentCar.topSpeed * 2.5)} KM/H
           </span>
-          <span className="text-zinc-500">|</span>
-          <span className="text-amber-400 capitalize">
+          <span className="text-zinc-500 hidden sm:inline">|</span>
+          <span className="text-amber-400 capitalize hidden sm:inline">
             {currentCar.decalType.replace('_', ' ')}
           </span>
         </div>
@@ -245,10 +308,22 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             >
               FREE CRUISE
             </button>
+
+            <button
+              onClick={onOpenMultiplayer}
+              className={`px-3 py-2 rounded-lg text-xs font-bold font-['Chakra_Petch',sans-serif] tracking-wider transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                onlineRoomCode
+                  ? 'bg-cyan-500 text-zinc-950 shadow-sm'
+                  : 'text-cyan-400 hover:bg-cyan-500/15 hover:text-cyan-300'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>{onlineRoomCode ? `ONLINE (${onlineRoomCode})` : 'ONLINE RACING'}</span>
+            </button>
           </div>
 
           {/* Quick Action Drawers: Customize & Track & Settings */}
-          <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
             {/* Customizer Drawer Button */}
             <button
               onClick={() => setDrawerOpen(drawerOpen === 'customizer' ? null : 'customizer')}
@@ -262,8 +337,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               <span>Garage</span>
             </button>
 
-            {/* Track Selector Button */}
-            {selectedMode !== 'openWorld' && (
+            {/* Track Selector Button (only for linear circuit modes) */}
+            {selectedMode !== 'openWorld' && selectedMode !== 'zen' && (
               <button
                 onClick={() => setDrawerOpen(drawerOpen === 'tracks' ? null : 'tracks')}
                 className={`px-3.5 py-2 rounded-xl text-xs font-mono border transition-all cursor-pointer flex items-center gap-2 ${
@@ -279,21 +354,25 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
 
             {/* Primary Start CTA */}
             <button
-              onClick={onStartGame}
-              className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-sm tracking-wider rounded-xl transition-all active:scale-95 flex items-center gap-2 font-['Chakra_Petch',sans-serif] shadow-[0_0_16px_rgba(245,158,11,0.3)] cursor-pointer"
+              onClick={isMobileDevice && !isFullscreen && onStartFullscreenRace ? onStartFullscreenRace : onStartGame}
+              className="px-5 sm:px-6 py-2.5 min-h-[44px] bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-xs sm:text-sm tracking-wider rounded-xl transition-all active:scale-95 flex items-center gap-2 font-['Chakra_Petch',sans-serif] shadow-[0_0_16px_rgba(245,158,11,0.3)] cursor-pointer whitespace-nowrap"
             >
-              <Play className="w-4 h-4 fill-current" />
-              <span>RACE</span>
-              <kbd className="text-[10px] bg-zinc-950/20 text-zinc-900 px-1.5 py-0.5 rounded font-mono font-bold">
-                SPACE
-              </kbd>
+              <Play className="w-4 h-4 fill-current shrink-0" />
+              <span>
+                {isMobileDevice && !isFullscreen ? 'TAP TO START (FULLSCREEN)' : 'RACE'}
+              </span>
+              {!isMobileDevice && (
+                <kbd className="text-[10px] bg-zinc-950/20 text-zinc-900 px-1.5 py-0.5 rounded font-mono font-bold">
+                  SPACE
+                </kbd>
+              )}
             </button>
           </div>
         </div>
 
         {/* Minimal flat control line */}
-        <div className="text-[11px] font-mono text-zinc-500 tracking-wider">
-          WASD / Arrows to Drive · Space Drift · Nitro (Shift/N) · Alt+E/Q Manual Shift · C Camera · L Lights · O/P Doors
+        <div className="hidden md:block text-[11px] font-mono text-zinc-500 tracking-wider">
+          WASD / Arrows to Drive · Space Drift · Nitro (Shift/N) · M World Map · C Camera · L Lights · B Radio
         </div>
       </div>
 
@@ -341,14 +420,34 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               >
                 Vehicles
               </button>
+              <button
+                onClick={() => setCustomizerSubTab('upgrades')}
+                className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                  customizerSubTab === 'upgrades'
+                    ? 'bg-amber-500 text-zinc-950 font-bold'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Performance
+              </button>
             </div>
 
-            <button
-              onClick={() => setDrawerOpen(null)}
-              className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onOpenProfile}
+                className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-amber-400 text-[11px] font-mono text-zinc-300 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
+                title="Edit Driver Profile"
+              >
+                <User className="w-3 h-3 text-amber-400" />
+                <span>{profile.username}</span>
+              </button>
+              <button
+                onClick={() => setDrawerOpen(null)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Sub-tab 1: Paint Color */}
@@ -525,7 +624,71 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               })}
             </div>
           )}
+
+          {/* Sub-tab 4: Performance Tuning System (Garage Upgrades) */}
+          {customizerSubTab === 'upgrades' && (
+            <div className="flex flex-col gap-3 max-h-72 overflow-y-auto">
+              {(['engine', 'handling', 'nitro'] as const).map((cat) => {
+                const config = UPGRADE_CONFIG[cat];
+                const currentLvl = carUpgrades ? carUpgrades[cat] : 0;
+                const isMax = currentLvl >= config.levels.length - 1;
+                const nextConfig = !isMax ? config.levels[currentLvl + 1] : null;
+                const canAfford = nextConfig ? totalCoins >= nextConfig.cost : false;
+
+                return (
+                  <div
+                    key={cat}
+                    className="p-3.5 rounded-2xl border border-zinc-800 bg-zinc-900/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold font-['Chakra_Petch',sans-serif] text-white">
+                          {config.name}
+                        </span>
+                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                          {isMax ? 'MAXED OUT (STAGE 4)' : `STAGE ${currentLvl} / 4`}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">{config.desc}</p>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        {config.levels.map((lvl) => (
+                          <div
+                            key={lvl.level}
+                            className={`h-1.5 w-6 rounded-full transition-all ${
+                              lvl.level <= currentLvl ? 'bg-amber-400 shadow-sm' : 'bg-zinc-800'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {isMax ? (
+                        <span className="text-xs font-mono font-bold text-emerald-400 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" /> FULLY TUNED
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => onBuyUpgrade(cat)}
+                          disabled={!canAfford}
+                          className={`px-4 py-2 rounded-xl font-mono text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                            canAfford
+                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md'
+                              : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                          }`}
+                        >
+                          <Coins className="w-3.5 h-3.5" />
+                          <span>UPGRADE ({nextConfig?.cost} COINS)</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+
       )}
 
       {/* 5. ON-DEMAND SLIDE-UP DRAWER: TRACK SELECTOR & UNLOCKS */}

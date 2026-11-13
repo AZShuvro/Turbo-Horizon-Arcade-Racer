@@ -5,7 +5,13 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine } from './game/GameEngine';
-import { CARS_CATALOG, TRACKS_CATALOG, DEFAULT_KEYBINDINGS, INITIAL_ACHIEVEMENTS } from './data/cars';
+import {
+  CARS_CATALOG,
+  TRACKS_CATALOG,
+  DEFAULT_KEYBINDINGS,
+  INITIAL_ACHIEVEMENTS,
+  UPGRADE_CONFIG,
+} from './data/cars';
 import {
   CarStats,
   GameMode,
@@ -19,13 +25,31 @@ import {
   CameraView,
   WeatherType,
   Achievement,
+  CarUpgrades,
+  OnScreenControlSetting,
+  RadioStation,
+  PlayerProfile,
+  MultiplayerRoomState,
+  MultiplayerCarConfig,
+  OpenWorldHudState,
 } from './types/game';
 import { TitleScreen } from './components/TitleScreen';
 import { GameHUD } from './components/GameHUD';
-import { GameOverModal } from './components/GameOverModal';
+import { GameOverModal, OnlineStandingResult } from './components/GameOverModal';
 import { PauseModal } from './components/PauseModal';
 import { SettingsModal } from './components/SettingsModal';
+import { PhotoModeModal } from './components/PhotoModeModal';
+import { ProfileModal } from './components/ProfileModal';
+import { MultiplayerModal } from './components/MultiplayerModal';
+import { WorldMapModal } from './components/WorldMapModal';
+import { multiplayerClient } from './network/multiplayerClient';
 import { soundManager } from './audio/soundManager';
+import {
+  isMobileOrTouchDevice,
+  isFullscreenActive,
+  enterFullscreenAndLandscape,
+  toggleFullscreenAndLandscape,
+} from './utils/mobileViewport';
 
 const HIGH_SCORE_KEY = 'turbo_horizon_highscore';
 const COINS_KEY = 'turbo_horizon_total_coins';
@@ -33,6 +57,8 @@ const UNLOCKED_CARS_KEY = 'turbo_horizon_unlocked_cars';
 const UNLOCKED_TRACKS_KEY = 'turbo_horizon_unlocked_tracks';
 const ACHIEVEMENTS_KEY = 'turbo_horizon_achievements';
 const SETTINGS_KEY = 'turbo_horizon_settings';
+const CAR_UPGRADES_KEY = 'turbo_horizon_car_upgrades';
+const PROFILE_KEY = 'turbo_horizon_profile';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,7 +73,7 @@ export default function App() {
     }
   });
 
-  // 2. Coin Economy Persistence (starts with 150 coins bonus so user can explore unlocks immediately)
+  // 2. Coin Economy Persistence (starts with 150 bonus coins for immediate unlocks & tuning)
   const [totalCoins, setTotalCoins] = useState<number>(() => {
     try {
       const saved = localStorage.getItem(COINS_KEY);
@@ -76,7 +102,17 @@ export default function App() {
     }
   });
 
-  // 4. Mini-Achievements Persistence
+  // 4. Car Performance Tuning Upgrades Persistence
+  const [carUpgrades, setCarUpgrades] = useState<CarUpgrades>(() => {
+    try {
+      const saved = localStorage.getItem(CAR_UPGRADES_KEY);
+      return saved ? JSON.parse(saved) : { engine: 0, handling: 0, nitro: 0 };
+    } catch {
+      return { engine: 0, handling: 0, nitro: 0 };
+    }
+  });
+
+  // 5. Mini-Achievements Persistence
   const [achievements, setAchievements] = useState<Achievement[]>(() => {
     try {
       const saved = localStorage.getItem(ACHIEVEMENTS_KEY);
@@ -91,7 +127,7 @@ export default function App() {
     return INITIAL_ACHIEVEMENTS;
   });
 
-  // 5. Settings Persistence (Keybindings, Transmission, Weather, Camera, Quality)
+  // 6. Settings Persistence (Keybindings, Transmission, Weather, Camera, Quality, Touch Controls)
   const [keyBindings, setKeyBindings] = useState<KeyBindings>(() => {
     try {
       const saved = localStorage.getItem(SETTINGS_KEY);
@@ -137,7 +173,99 @@ export default function App() {
   });
 
   const [quality, setQuality] = useState<GraphicsQuality>('balanced');
+  const [touchControls, setTouchControls] = useState<OnScreenControlSetting>(() => {
+    try {
+      const saved = localStorage.getItem(SETTINGS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.touchControls) return parsed.touchControls;
+      }
+    } catch {}
+    return 'auto';
+  });
+
+  // Device & Touch Detection + Fullscreen tracking
+  const [isMobileDevice, setIsMobileDevice] = useState(() => isMobileOrTouchDevice());
+  const [isFullscreen, setIsFullscreen] = useState(() => isFullscreenActive());
+
+  useEffect(() => {
+    const handleCheckTouch = () => {
+      setIsMobileDevice(isMobileOrTouchDevice());
+    };
+    const handleFirstTouch = () => {
+      setIsMobileDevice(true);
+    };
+    const handleFullscreenChange = () => {
+      setIsFullscreen(isFullscreenActive());
+    };
+
+    window.addEventListener('resize', handleCheckTouch);
+    window.addEventListener('orientationchange', handleCheckTouch);
+    window.addEventListener('touchstart', handleFirstTouch, { passive: true, once: true });
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      window.removeEventListener('resize', handleCheckTouch);
+      window.removeEventListener('orientationchange', handleCheckTouch);
+      window.removeEventListener('touchstart', handleFirstTouch);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
+
+  const showTouchControls =
+    touchControls === 'force_on' ||
+    (touchControls !== 'force_off' && isMobileDevice);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    const next = await toggleFullscreenAndLandscape();
+    setIsFullscreen(next);
+  }, []);
+
+  // In-Game Radio Station
+  const [radioStation, setRadioStation] = useState<RadioStation>('synthwave');
+
+  // Photo Mode State
+  const [isPhotoMode, setIsPhotoMode] = useState(false);
+  const [photoFov, setPhotoFov] = useState(65);
+  const [photoFilter, setPhotoFilter] = useState<'normal' | 'vintage' | 'cyber' | 'noir'>('normal');
+
+  // Settings, Profile, Multiplayer & World Map Modal States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isMultiplayerOpen, setIsMultiplayerOpen] = useState(false);
+  const [isWorldMapOpen, setIsWorldMapOpen] = useState(false);
+
+  // 7. Player Profile Persistence
+  const [profile, setProfile] = useState<PlayerProfile>(() => {
+    try {
+      const saved = localStorage.getItem(PROFILE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.username) return parsed;
+      }
+    } catch {}
+    const randomNum = Math.floor(10 + Math.random() * 89);
+    return {
+      username: `RACER_${randomNum}`,
+      tagColor: '#f59e0b',
+      racesCompleted: 0,
+      wins: 0,
+    };
+  });
+
+  // 8. Online Multiplayer State
+  const [onlineRoom, setOnlineRoom] = useState<MultiplayerRoomState | null>(null);
+  const [onlineSelfId, setOnlineSelfId] = useState<string | null>(null);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
+  const [onlineBanner, setOnlineBanner] = useState<string | null>(null);
+  const [onlineBusy, setOnlineBusy] = useState(false);
+  const [onlineCountdown, setOnlineCountdown] = useState<number | null>(null);
 
   // Game UI state
   const [gameState, setGameState] = useState<GameState>('title');
@@ -166,12 +294,27 @@ export default function App() {
     doorsOpen: boolean;
     trunkOpen: boolean;
     heatLevel?: number;
+    raceRank?: number;
+    totalRacers?: number;
+    lap?: number;
+    totalLaps?: number;
+    leaderboard?: Array<{
+      id: string;
+      username: string;
+      distance: number;
+      lap: number;
+      finished: boolean;
+      finishRank: number;
+      isLocal: boolean;
+      color: string;
+    }>;
     zoneName?: string;
     trophiesFound?: number;
     totalTrophies?: number;
     posX?: number;
     posZ?: number;
     heading?: number;
+    openWorld?: OpenWorldHudState;
   }>({
     score: 0,
     speed: 0,
@@ -191,6 +334,8 @@ export default function App() {
     indicators: 'off',
     doorsOpen: false,
     trunkOpen: false,
+    raceRank: 1,
+    totalRacers: 4,
   });
 
   const [floatingTexts, setFloatingTexts] = useState<FloatingText[]>([]);
@@ -223,20 +368,21 @@ export default function App() {
 
   // Save Settings helper
   const saveSettingsToStorage = useCallback(
-    (overrides?: Partial<{ transmission: TransmissionType; cameraView: CameraView; weather: WeatherType; quality: GraphicsQuality; keyBindings: KeyBindings }>) => {
+    (overrides?: Partial<{ transmission: TransmissionType; cameraView: CameraView; weather: WeatherType; quality: GraphicsQuality; touchControls: OnScreenControlSetting; keyBindings: KeyBindings }>) => {
       try {
         const payload = {
           transmission,
           cameraView,
           weather,
           quality,
+          touchControls,
           keyBindings,
           ...overrides,
         };
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
       } catch {}
     },
-    [transmission, cameraView, weather, quality, keyBindings]
+    [transmission, cameraView, weather, quality, touchControls, keyBindings]
   );
 
   // Trigger Achievement unlock with reward coins
@@ -248,13 +394,11 @@ export default function App() {
 
         const updated = prev.map((a) => (a.id === id ? { ...a, unlocked: true } : a));
 
-        // Save to localStorage
         try {
           const unlockedIds = updated.filter((a) => a.unlocked).map((a) => a.id);
           localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(unlockedIds));
         } catch {}
 
-        // Add reward coins
         setTotalCoins((c) => {
           const newTotal = c + target.rewardCoins;
           try {
@@ -263,10 +407,8 @@ export default function App() {
           return newTotal;
         });
 
-        // Play celebration fanfare
         soundManager.playAchievementUnlock();
 
-        // Show floating notification
         setFloatingTexts((ft) => [
           ...ft.slice(-3),
           {
@@ -292,8 +434,51 @@ export default function App() {
     engineRef.current = engine;
 
     engine.carController.transmission = transmission;
+    engine.carController.setUpgrades(carUpgrades);
     engine.setCameraView(cameraView);
     engine.setWeather(weather);
+    engine.updatePlayerProfileTag(profile.username, profile.tagColor);
+
+    engine.onLocalTransform = (tr) => {
+      multiplayerClient.sendPlayerState(tr);
+    };
+
+    engine.onOnlineFinish = () => {
+      multiplayerClient.sendFinish();
+      soundManager.stopEngine();
+
+      setProfile((prev) => {
+        const won = engine.raceRank === 1;
+        const updated: PlayerProfile = {
+          ...prev,
+          racesCompleted: prev.racesCompleted + 1,
+          wins: prev.wins + (won ? 1 : 0),
+        };
+        try {
+          localStorage.setItem(PROFILE_KEY, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+
+      if (engine.coins > 0) {
+        setTotalCoins((prev) => {
+          const upd = prev + engine.coins;
+          try {
+            localStorage.setItem(COINS_KEY, upd.toString());
+          } catch {}
+          return upd;
+        });
+      }
+
+      setGameOverStats({
+        score: engine.score,
+        isNewHigh: false,
+        distance: engine.distance,
+        coins: engine.coins,
+        nearMisses: engine.nearMisses,
+      });
+      setGameState('gameover');
+    };
 
     engine.onScoreUpdate = (stats) => {
       setHudStats(stats);
@@ -321,7 +506,6 @@ export default function App() {
         } catch {}
       }
 
-      // Add coins collected in session to persistent balance
       if (engine.coins > 0) {
         setTotalCoins((prev) => {
           const updated = prev + engine.coins;
@@ -350,7 +534,6 @@ export default function App() {
     let animId: number;
     const loop = () => {
       engine.tick(inputRef.current);
-      // Reset edge-triggered shift inputs
       inputRef.current.upshiftJustPressed = false;
       inputRef.current.downshiftJustPressed = false;
       animId = requestAnimationFrame(loop);
@@ -364,24 +547,246 @@ export default function App() {
     };
   }, []);
 
+  // Build car visual payload for multiplayer room sync
+  const buildCarPayload = useCallback(
+    (car: CarStats): MultiplayerCarConfig => ({
+      id: car.id,
+      name: car.name,
+      primaryColor: car.primaryColor,
+      accentColor: car.accentColor,
+      decalType: car.decalType,
+      stripeColor: car.stripeColor,
+    }),
+    []
+  );
+
+  // Sync profile updates with 3D tag & active multiplayer room
+  const handleSaveProfile = useCallback(
+    (updated: PlayerProfile) => {
+      setProfile(updated);
+      try {
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(updated));
+      } catch {}
+      engineRef.current?.updatePlayerProfileTag(updated.username, updated.tagColor);
+      if (onlineRoom) {
+        multiplayerClient.updateCar(updated.username, buildCarPayload(currentCar));
+      }
+    },
+    [onlineRoom, currentCar, buildCarPayload]
+  );
+
+  // Subscribe to real-time WebSocket multiplayer events
+  useEffect(() => {
+    const laneOffsets = [-4.5, -1.5, 1.5, 4.5];
+    let goClearTimeout: number | null = null;
+
+    const unsubscribe = multiplayerClient.subscribe((evt) => {
+      switch (evt.type) {
+        case 'room:joined': {
+          setOnlineBusy(false);
+          setOnlineError(null);
+          setOnlineSelfId(evt.payload.selfId);
+          setOnlineRoom(evt.payload.room);
+          setSelectedTrack(evt.payload.room.trackId);
+          engineRef.current?.setTrack(evt.payload.room.trackId);
+          engineRef.current?.syncRemotePlayersMeta(evt.payload.room.players, evt.payload.selfId);
+          setOnlineBanner(`Joined room ${evt.payload.room.code}`);
+          break;
+        }
+        case 'room:state': {
+          const room = evt.payload;
+          setOnlineRoom(room);
+          setSelectedTrack(room.trackId);
+          engineRef.current?.setTrack(room.trackId);
+          engineRef.current?.syncRemotePlayersMeta(room.players, multiplayerClient.selfId);
+
+          if (room.status === 'lobby') {
+            setOnlineCountdown(null);
+            setGameState((prev) => {
+              if (prev === 'gameover' || prev === 'playing') {
+                engineRef.current?.resetToTitle();
+                setIsMultiplayerOpen(true);
+                return 'title';
+              }
+              return prev;
+            });
+          }
+          break;
+        }
+        case 'room:error': {
+          setOnlineBusy(false);
+          setOnlineError(evt.payload.message);
+          break;
+        }
+        case 'race:countdown': {
+          const { count } = evt.payload;
+          const room = multiplayerClient.currentRoom;
+          const selfId = multiplayerClient.selfId;
+
+          if (count === 3 && room && engineRef.current) {
+            soundManager.unlock();
+            setIsMultiplayerOpen(false);
+            setIsProfileOpen(false);
+            setIsSettingsOpen(false);
+            setGameMode('online');
+            setSelectedTrack(room.trackId);
+            engineRef.current.setTrack(room.trackId);
+            engineRef.current.syncRemotePlayersMeta(room.players, selfId);
+
+            const slotIdx = Math.max(0, room.players.findIndex((p) => p.id === selfId));
+            const startX = laneOffsets[slotIdx % 4];
+            engineRef.current.start('online', {
+              startX,
+              totalLaps: room.totalLaps,
+              lapDistance: room.lapDistance,
+              countdownActive: true,
+            });
+            engineRef.current.carController.setUpgrades(carUpgrades);
+            setGameState('playing');
+          }
+
+          setOnlineCountdown(count);
+          if (count > 0) {
+            soundManager.playBlinker();
+          } else {
+            soundManager.playCheckpoint();
+            if (goClearTimeout) window.clearTimeout(goClearTimeout);
+            goClearTimeout = window.setTimeout(() => {
+              setOnlineCountdown(null);
+            }, 950);
+          }
+          break;
+        }
+        case 'race:go': {
+          engineRef.current?.setOnlineRacePhase('racing');
+          break;
+        }
+        case 'players:sync': {
+          engineRef.current?.applyRemoteTransforms(evt.transforms, multiplayerClient.selfId);
+          break;
+        }
+        case 'player:finished': {
+          const { username, rank } = evt.payload;
+          setFloatingTexts((ft) => [
+            ...ft.slice(-3),
+            {
+              id: Date.now() + Math.random(),
+              text: `${username} FINISHED #${rank}!`,
+              type: 'checkpoint',
+              score: 0,
+              timestamp: Date.now(),
+            },
+          ]);
+          break;
+        }
+        case 'player:left': {
+          setOnlineBanner(`${evt.payload.username} disconnected from the room.`);
+          setFloatingTexts((ft) => [
+            ...ft.slice(-3),
+            {
+              id: Date.now() + Math.random(),
+              text: `${evt.payload.username} LEFT RACE`,
+              type: 'hazard',
+              score: 0,
+              timestamp: Date.now(),
+            },
+          ]);
+          break;
+        }
+        case 'host:migrated': {
+          setOnlineBanner(`Host migrated to ${evt.payload.newHostUsername}`);
+          setFloatingTexts((ft) => [
+            ...ft.slice(-3),
+            {
+              id: Date.now() + Math.random(),
+              text: `NEW HOST: ${evt.payload.newHostUsername}`,
+              type: 'powerup',
+              score: 0,
+              timestamp: Date.now(),
+            },
+          ]);
+          break;
+        }
+      }
+    });
+
+    return () => {
+      if (goClearTimeout) window.clearTimeout(goClearTimeout);
+      unsubscribe();
+    };
+  }, [carUpgrades]);
+
   // Update car when selected
   const handleSelectCar = useCallback((car: CarStats) => {
     setCurrentCar(car);
     if (engineRef.current) {
       engineRef.current.changePlayerCar(car);
+      engineRef.current.carController.setUpgrades(carUpgrades);
     }
-  }, []);
+    if (onlineRoom) {
+      multiplayerClient.updateCar(profile.username, buildCarPayload(car));
+    }
+  }, [carUpgrades, onlineRoom, profile.username, buildCarPayload]);
 
-  // Update car customization (paint, stripes)
+  // Update car customization
   const handleUpdateCarCustomization = useCallback((updates: Partial<CarStats>) => {
     setCurrentCar((prev) => {
       const updated = { ...prev, ...updates };
       if (engineRef.current) {
         engineRef.current.changePlayerCar(updated);
+        engineRef.current.carController.setUpgrades(carUpgrades);
+      }
+      if (onlineRoom) {
+        multiplayerClient.updateCar(profile.username, buildCarPayload(updated));
       }
       return updated;
     });
-  }, []);
+  }, [carUpgrades, onlineRoom, profile.username, buildCarPayload]);
+
+  // Buy Car Upgrades (Performance Tuning)
+  const handleBuyUpgrade = useCallback(
+    (category: 'engine' | 'handling' | 'nitro') => {
+      const config = UPGRADE_CONFIG[category];
+      const currentLvl = carUpgrades[category];
+      if (currentLvl >= config.levels.length - 1) return false;
+      const nextLevelConfig = config.levels[currentLvl + 1];
+      if (totalCoins < nextLevelConfig.cost) return false;
+
+      const newCoins = totalCoins - nextLevelConfig.cost;
+      const newUpgrades: CarUpgrades = {
+        ...carUpgrades,
+        [category]: currentLvl + 1,
+      };
+
+      setTotalCoins(newCoins);
+      setCarUpgrades(newUpgrades);
+
+      try {
+        localStorage.setItem(COINS_KEY, newCoins.toString());
+        localStorage.setItem(CAR_UPGRADES_KEY, JSON.stringify(newUpgrades));
+      } catch {}
+
+      soundManager.playCoin();
+      soundManager.playAchievementUnlock();
+
+      if (engineRef.current) {
+        engineRef.current.carController.setUpgrades(newUpgrades);
+      }
+
+      setFloatingTexts((ft) => [
+        ...ft.slice(-3),
+        {
+          id: Date.now(),
+          text: `⚡ UPGRADE: ${config.name} (${nextLevelConfig.label.toUpperCase()})!`,
+          type: 'powerup',
+          score: 300,
+          timestamp: Date.now(),
+        },
+      ]);
+      return true;
+    },
+    [carUpgrades, totalCoins]
+  );
 
   // Unlock car
   const handleUnlockCar = useCallback(
@@ -513,6 +918,15 @@ export default function App() {
     [saveSettingsToStorage]
   );
 
+  // Touch controls switch
+  const handleChangeTouchControls = useCallback(
+    (tc: OnScreenControlSetting) => {
+      setTouchControls(tc);
+      saveSettingsToStorage({ touchControls: tc });
+    },
+    [saveSettingsToStorage]
+  );
+
   // Keybindings update
   const handleChangeKeyBindings = useCallback(
     (kb: KeyBindings) => {
@@ -522,17 +936,96 @@ export default function App() {
     [saveSettingsToStorage]
   );
 
-  // Start game
+  // Radio Station switch
+  const handleChangeRadioStation = useCallback((rs: RadioStation) => {
+    setRadioStation(rs);
+    soundManager.setRadioStation(rs);
+  }, []);
+
+  const handleCycleRadio = useCallback(() => {
+    const nextSt = soundManager.nextRadioStation();
+    setRadioStation(nextSt);
+    setFloatingTexts((ft) => [
+      ...ft.slice(-3),
+      {
+        id: Date.now(),
+        text: `📻 RADIO: ${nextSt.toUpperCase()}`,
+        type: 'powerup',
+        score: 0,
+        timestamp: Date.now(),
+      },
+    ]);
+  }, []);
+
+  // Photo Mode handlers
+  const handleTogglePhotoMode = useCallback(() => {
+    setIsPhotoMode((prev) => {
+      const next = !prev;
+      if (engineRef.current) {
+        engineRef.current.isPhotoMode = next;
+      }
+      return next;
+    });
+  }, []);
+
+  const handleTakeScreenshot = useCallback(() => {
+    if (!engineRef.current) return;
+    const dataUrl = engineRef.current.takeScreenshot();
+    const link = document.createElement('a');
+    link.download = `TurboHorizon_Photo_${Date.now()}.png`;
+    link.href = dataUrl;
+    link.click();
+    soundManager.playSpeedTrapFlash();
+  }, []);
+
+  // Start game (and optional fullscreen + landscape launch for mobile)
   const handleStartGame = useCallback(() => {
     soundManager.unlock();
+    setIsWorldMapOpen(false);
     if (engineRef.current) {
       engineRef.current.start(gameMode);
+      engineRef.current.carController.setUpgrades(carUpgrades);
     }
     setGameState('playing');
-  }, [gameMode]);
+  }, [gameMode, carUpgrades]);
+
+  const handleStartFullscreenRace = useCallback(async () => {
+    soundManager.unlock();
+    setIsWorldMapOpen(false);
+    await enterFullscreenAndLandscape();
+    setIsFullscreen(isFullscreenActive());
+    if (engineRef.current) {
+      engineRef.current.start(gameMode);
+      engineRef.current.carController.setUpgrades(carUpgrades);
+    }
+    setGameState('playing');
+  }, [gameMode, carUpgrades]);
+
+  // Open-World Interactive Map Toggle (pauses driving cleanly while planning route)
+  const handleOpenWorldMap = useCallback(() => {
+    inputRef.current = {
+      forward: false,
+      backward: false,
+      left: false,
+      right: false,
+      drift: false,
+      nitro: false,
+      clutch: false,
+      upshiftJustPressed: false,
+      downshiftJustPressed: false,
+    };
+    engineRef.current?.pause();
+    setIsWorldMapOpen(true);
+  }, []);
+
+  const handleCloseWorldMap = useCallback(() => {
+    setIsWorldMapOpen(false);
+    engineRef.current?.resume();
+  }, []);
 
   // Pause & Resume
   const handlePause = useCallback(() => {
+    setIsWorldMapOpen(false);
     if (engineRef.current) {
       engineRef.current.pause();
     }
@@ -547,8 +1040,15 @@ export default function App() {
   }, []);
 
   const handleHome = useCallback(() => {
+    setIsWorldMapOpen(false);
+    if (onlineRoom) {
+      multiplayerClient.leaveRoom();
+      setOnlineRoom(null);
+      setOnlineSelfId(null);
+      setOnlineCountdown(null);
+      setOnlineBanner(null);
+    }
     if (engineRef.current) {
-      // Add coins if any
       if (engineRef.current.coins > 0) {
         setTotalCoins((prev) => {
           const upd = prev + engineRef.current!.coins;
@@ -560,17 +1060,78 @@ export default function App() {
       }
       engineRef.current.resetToTitle();
     }
+    setGameMode((m) => (m === 'online' ? 'arcade' : m));
+    setIsPhotoMode(false);
     setGameState('title');
+  }, [onlineRoom]);
+
+  // Multiplayer Lobby Action Handlers
+  const handleCreateRoom = useCallback(
+    async (trackId: TrackId, totalLaps: number) => {
+      setOnlineBusy(true);
+      setOnlineError(null);
+      setOnlineBanner(null);
+      try {
+        await multiplayerClient.createRoom(
+          profile.username,
+          buildCarPayload(currentCar),
+          trackId,
+          totalLaps
+        );
+      } catch (err: any) {
+        setOnlineBusy(false);
+        setOnlineError(err?.message || 'Unable to connect to multiplayer server.');
+      }
+    },
+    [profile.username, currentCar, buildCarPayload]
+  );
+
+  const handleJoinRoom = useCallback(
+    async (code: string) => {
+      setOnlineBusy(true);
+      setOnlineError(null);
+      setOnlineBanner(null);
+      try {
+        await multiplayerClient.joinRoom(code, profile.username, buildCarPayload(currentCar));
+      } catch (err: any) {
+        setOnlineBusy(false);
+        setOnlineError(err?.message || 'Unable to connect to multiplayer server.');
+      }
+    },
+    [profile.username, currentCar, buildCarPayload]
+  );
+
+  const handleLeaveRoom = useCallback(() => {
+    multiplayerClient.leaveRoom();
+    setOnlineRoom(null);
+    setOnlineSelfId(null);
+    setOnlineCountdown(null);
+    setOnlineError(null);
+    setOnlineBanner(null);
+    engineRef.current?.clearRemoteCars();
   }, []);
 
   // Keyboard controls listener matching customizable keybindings
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const targetTag = (e.target as HTMLElement)?.tagName;
+      if (targetTag === 'INPUT' || targetTag === 'TEXTAREA') {
+        return;
+      }
+
       soundManager.unlock();
       const kb = keyBindingsRef.current;
 
-      // Escape / Pause
+      // Escape / Pause / Close World Map
       if (e.code === 'Escape') {
+        if (isWorldMapOpen) {
+          handleCloseWorldMap();
+          return;
+        }
+        if (isPhotoMode) {
+          handleTogglePhotoMode();
+          return;
+        }
         if (gameState === 'playing') {
           handlePause();
         } else if (gameState === 'paused') {
@@ -579,9 +1140,46 @@ export default function App() {
         return;
       }
 
+      // Open-World Interactive Map Hotkey
+      if (
+        gameState === 'playing' &&
+        !isPhotoMode &&
+        (gameMode === 'openWorld' || gameMode === 'zen') &&
+        e.code === (kb.worldMap || 'KeyM')
+      ) {
+        if (isWorldMapOpen) {
+          handleCloseWorldMap();
+        } else {
+          handleOpenWorldMap();
+        }
+        return;
+      }
+
+      if (isWorldMapOpen) return;
+
       // Quick restart
-      if (e.code === 'KeyR' && gameState === 'playing') {
+      if (e.code === 'KeyR' && gameState === 'playing' && !isPhotoMode) {
         handleStartGame();
+        return;
+      }
+
+      // Photo Mode Toggle
+      if (e.code === kb.photoMode && gameState === 'playing') {
+        handleTogglePhotoMode();
+        return;
+      }
+
+      if (isPhotoMode) return; // Freeze inputs while in Photo Mode
+
+      // Radio Station Cycle
+      if (e.code === kb.radio) {
+        handleCycleRadio();
+        return;
+      }
+
+      // Car Horn
+      if (e.code === kb.horn) {
+        engineRef.current?.honkHorn();
         return;
       }
 
@@ -604,7 +1202,13 @@ export default function App() {
         e.preventDefault();
         if (gameState === 'playing') {
           inputRef.current.drift = true;
-        } else if (gameState === 'title' || gameState === 'gameover') {
+        } else if (
+          (gameState === 'title' || gameState === 'gameover') &&
+          !isProfileOpen &&
+          !isMultiplayerOpen &&
+          !isSettingsOpen &&
+          gameMode !== 'online'
+        ) {
           handleStartGame();
         }
       }
@@ -623,11 +1227,13 @@ export default function App() {
       // Manual Upshift
       if (e.code === kb.upshift) {
         inputRef.current.upshiftJustPressed = true;
+        engineRef.current?.carController.shiftUp(inputRef.current.clutch);
       }
 
       // Manual Downshift
       if (e.code === kb.downshift) {
         inputRef.current.downshiftJustPressed = true;
+        engineRef.current?.carController.shiftDown(inputRef.current.clutch);
       }
 
       // Interactive Vehicle Controls
@@ -705,7 +1311,44 @@ export default function App() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [gameState, handleStartGame, handlePause, handleResume]);
+  }, [
+    gameState,
+    gameMode,
+    isPhotoMode,
+    isWorldMapOpen,
+    isProfileOpen,
+    isMultiplayerOpen,
+    isSettingsOpen,
+    handleStartGame,
+    handlePause,
+    handleResume,
+    handleTogglePhotoMode,
+    handleCycleRadio,
+    handleOpenWorldMap,
+    handleCloseWorldMap,
+  ]);
+
+  // Compute sorted online standings for GameOverModal
+  const onlineResults: OnlineStandingResult[] = React.useMemo(() => {
+    if (!onlineRoom) return [];
+    return [...onlineRoom.players]
+      .sort((a, b) => {
+        if (a.finished && b.finished && a.finishRank && b.finishRank) {
+          return a.finishRank - b.finishRank;
+        }
+        if (a.finished !== b.finished) return a.finished ? -1 : 1;
+        return b.distance - a.distance;
+      })
+      .map((p) => ({
+        id: p.id,
+        username: p.username,
+        carName: p.car.name,
+        rank: p.finishRank,
+        finishTime: p.finishTime,
+        finished: p.finished,
+        isLocal: p.id === onlineSelfId,
+      }));
+  }, [onlineRoom, onlineSelfId]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 font-sans select-none">
@@ -723,6 +1366,8 @@ export default function App() {
           totalCoins={totalCoins}
           unlockedCars={unlockedCars}
           unlockedTracks={unlockedTracks}
+          carUpgrades={carUpgrades}
+          onBuyUpgrade={handleBuyUpgrade}
           onSelectCar={handleSelectCar}
           onUpdateCarCustomization={handleUpdateCarCustomization}
           onSelectTrack={handleSelectTrack}
@@ -732,6 +1377,17 @@ export default function App() {
           onUnlockTrack={handleUnlockTrack}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onStartGame={handleStartGame}
+          profile={profile}
+          onlineRoomCode={onlineRoom?.code || null}
+          onOpenProfile={() => setIsProfileOpen(true)}
+          onOpenMultiplayer={() => {
+            setOnlineError(null);
+            setIsMultiplayerOpen(true);
+          }}
+          isMobileDevice={isMobileDevice}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={handleToggleFullscreen}
+          onStartFullscreenRace={handleStartFullscreenRace}
         />
       )}
 
@@ -765,7 +1421,22 @@ export default function App() {
           doorsOpen={hudStats.doorsOpen}
           trunkOpen={hudStats.trunkOpen}
           heatLevel={hudStats.heatLevel}
+          raceRank={hudStats.raceRank}
+          totalRacers={hudStats.totalRacers}
+          radioStation={radioStation}
           floatingTexts={floatingTexts}
+          showTouchControls={showTouchControls}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={handleToggleFullscreen}
+          openWorld={hudStats.openWorld}
+          onOpenWorldMap={handleOpenWorldMap}
+          onCancelStreetRace={() => engineRef.current?.cancelStreetRace()}
+          username={profile.username}
+          tagColor={profile.tagColor}
+          lap={hudStats.lap}
+          totalLaps={hudStats.totalLaps}
+          countdown={onlineCountdown}
+          leaderboard={hudStats.leaderboard}
           onPause={handlePause}
           onToggleCamera={() => {
             if (engineRef.current) {
@@ -773,6 +1444,9 @@ export default function App() {
               setCameraView(engineRef.current.cameraView);
             }
           }}
+          onCycleRadio={handleCycleRadio}
+          onTogglePhotoMode={handleTogglePhotoMode}
+          onHonkHorn={() => engineRef.current?.honkHorn()}
           onToggleHeadlights={() => {
             engineRef.current?.carController.toggleHeadlights();
           }}
@@ -795,6 +1469,12 @@ export default function App() {
             inputRef.current.left = dir === 'left';
             inputRef.current.right = dir === 'right';
           }}
+          onTouchLeft={(active) => {
+            inputRef.current.left = active;
+          }}
+          onTouchRight={(active) => {
+            inputRef.current.right = active;
+          }}
           onTouchThrottle={(fwd) => {
             inputRef.current.forward = fwd;
           }}
@@ -813,11 +1493,47 @@ export default function App() {
         />
       )}
 
+      {/* Interactive 4-Zone Open-World Map, GPS & Fast Travel */}
+      {gameState === 'playing' && (gameMode === 'openWorld' || gameMode === 'zen') && hudStats.openWorld && (
+        <WorldMapModal
+          isOpen={isWorldMapOpen}
+          onClose={handleCloseWorldMap}
+          posX={hudStats.posX || 0}
+          posZ={hudStats.posZ || 0}
+          headingDeg={hudStats.heading || 0}
+          openWorld={hudStats.openWorld}
+          onSetWaypoint={(x, z, label) => {
+            engineRef.current?.setGpsWaypoint(x, z, label);
+          }}
+          onClearWaypoint={() => {
+            engineRef.current?.clearGpsWaypoint();
+          }}
+          onFastTravel={(hubId) => {
+            engineRef.current?.fastTravelToHub(hubId);
+            handleCloseWorldMap();
+          }}
+        />
+      )}
+
+      {/* Photo Mode Modal */}
+      <PhotoModeModal
+        isOpen={isPhotoMode}
+        onClose={handleTogglePhotoMode}
+        onTakeScreenshot={handleTakeScreenshot}
+        fov={photoFov}
+        onChangeFov={(f) => {
+          setPhotoFov(f);
+          if (engineRef.current) engineRef.current.photoFov = f;
+        }}
+        filter={photoFilter}
+        onChangeFilter={setPhotoFilter}
+      />
+
       {/* Pause Modal */}
       {gameState === 'paused' && (
         <PauseModal
           onResume={handleResume}
-          onRestart={handleStartGame}
+          onRestart={gameMode === 'online' ? handleResume : handleStartGame}
           onHome={handleHome}
           onOpenSettings={() => setIsSettingsOpen(true)}
         />
@@ -834,10 +1550,44 @@ export default function App() {
           nearMisses={gameOverStats.nearMisses}
           onRestart={handleStartGame}
           onHome={handleHome}
+          gameMode={gameMode}
+          onlineResults={onlineResults}
+          isHost={Boolean(onlineRoom && onlineSelfId && onlineRoom.hostId === onlineSelfId)}
+          onBackToLobby={() => multiplayerClient.backToLobby()}
         />
       )}
 
-      {/* Settings Modal */}
+      {/* Player Profile Modal */}
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        profile={profile}
+        highScore={highScore}
+        totalCoins={totalCoins}
+        onSaveProfile={handleSaveProfile}
+      />
+
+      {/* Online Multiplayer Room Lobby Modal */}
+      <MultiplayerModal
+        isOpen={isMultiplayerOpen}
+        onClose={() => setIsMultiplayerOpen(false)}
+        profile={profile}
+        currentCar={currentCar}
+        selectedTrack={selectedTrack}
+        room={onlineRoom}
+        selfId={onlineSelfId}
+        errorMsg={onlineError}
+        statusBanner={onlineBanner}
+        isBusy={onlineBusy}
+        onCreateRoom={handleCreateRoom}
+        onJoinRoom={handleJoinRoom}
+        onLeaveRoom={handleLeaveRoom}
+        onSetTrack={(tid, laps) => multiplayerClient.setTrack(tid, laps)}
+        onStartRace={() => multiplayerClient.startRace()}
+        onOpenProfile={() => setIsProfileOpen(true)}
+      />
+
+      {/* Settings & Custom Keymapping Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -845,12 +1595,16 @@ export default function App() {
         onChangeTransmission={handleChangeTransmission}
         keyBindings={keyBindings}
         onChangeKeyBindings={handleChangeKeyBindings}
+        touchControls={touchControls}
+        onChangeTouchControls={handleChangeTouchControls}
         cameraView={cameraView}
         onChangeCameraView={handleChangeCameraView}
         weather={weather}
         onChangeWeather={handleChangeWeather}
         quality={quality}
         onChangeQuality={handleSelectQuality}
+        radioStation={radioStation}
+        onChangeRadioStation={handleChangeRadioStation}
         achievements={achievements}
         totalCoins={totalCoins}
       />

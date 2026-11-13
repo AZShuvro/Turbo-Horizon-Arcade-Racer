@@ -150,7 +150,108 @@ export const DEFAULT_KEYBINDINGS: KeyBindings = {
   doors: 'KeyO',
   trunk: 'KeyP',
   cameraToggle: 'KeyC',
+  radio: 'KeyB',
+  photoMode: 'KeyF',
+  horn: 'KeyX',
+  worldMap: 'KeyM',
 };
+
+export const KEYBINDING_PRESETS: { name: string; desc: string; bindings: KeyBindings }[] = [
+  {
+    name: 'WASD & Alt (Default)',
+    desc: 'WASD drive, Space drift, N nitro, Alt+E/Q shift, M World Map',
+    bindings: DEFAULT_KEYBINDINGS,
+  },
+  {
+    name: 'Arrow Keys Arcade',
+    desc: 'Arrows drive, Ctrl drift, Shift nitro, Z+X shift, M World Map',
+    bindings: {
+      steerLeft: 'ArrowLeft',
+      steerRight: 'ArrowRight',
+      throttle: 'ArrowUp',
+      brake: 'ArrowDown',
+      drift: 'ControlLeft',
+      nitro: 'ShiftRight',
+      clutch: 'KeyZ',
+      upshift: 'KeyX',
+      downshift: 'KeyC',
+      headlights: 'KeyL',
+      indicatorLeft: 'BracketLeft',
+      indicatorRight: 'BracketRight',
+      hazardLights: 'KeyH',
+      doors: 'KeyO',
+      trunk: 'KeyP',
+      cameraToggle: 'KeyV',
+      radio: 'KeyU',
+      photoMode: 'KeyF',
+      horn: 'KeyB',
+      worldMap: 'KeyM',
+    },
+  },
+  {
+    name: 'ESDF Pro Simulator',
+    desc: 'ESDF drive, Space drift, A nitro, W clutch, R/T shift, M World Map',
+    bindings: {
+      steerLeft: 'KeyS',
+      steerRight: 'KeyF',
+      throttle: 'KeyE',
+      brake: 'KeyD',
+      drift: 'Space',
+      nitro: 'KeyA',
+      clutch: 'KeyW',
+      upshift: 'KeyR',
+      downshift: 'KeyQ',
+      headlights: 'KeyL',
+      indicatorLeft: 'KeyZ',
+      indicatorRight: 'KeyC',
+      hazardLights: 'KeyX',
+      doors: 'KeyO',
+      trunk: 'KeyP',
+      cameraToggle: 'KeyV',
+      radio: 'KeyB',
+      photoMode: 'KeyY',
+      horn: 'KeyH',
+      worldMap: 'KeyM',
+    },
+  },
+];
+
+export const UPGRADE_CONFIG = {
+  engine: {
+    name: 'Twin-Turbo V8 Engine',
+    desc: 'Increases top speed (+6 km/h per stage) & acceleration thrust',
+    levels: [
+      { level: 0, cost: 0, bonusSpeed: 0, label: 'Stock Engine' },
+      { level: 1, cost: 120, bonusSpeed: 6, label: 'Stage 1 ECU Tune' },
+      { level: 2, cost: 280, bonusSpeed: 12, label: 'Stage 2 Cold Air Intake' },
+      { level: 3, cost: 550, bonusSpeed: 20, label: 'Stage 3 Twin Turbochargers' },
+      { level: 4, cost: 950, bonusSpeed: 30, label: 'Stage 4 Billet Race Block' },
+    ],
+  },
+  handling: {
+    name: 'Race Suspension & Tires',
+    desc: 'Sharper steering response, grip recovery & drift angle control',
+    levels: [
+      { level: 0, cost: 0, bonusHandling: 0, label: 'Factory Suspension' },
+      { level: 1, cost: 100, bonusHandling: 0.05, label: 'Street Sport Springs' },
+      { level: 2, cost: 240, bonusHandling: 0.10, label: 'Track Sway Bars' },
+      { level: 3, cost: 480, bonusHandling: 0.16, label: 'Adjustable Coilovers' },
+      { level: 4, cost: 850, bonusHandling: 0.22, label: 'Full Slick Racing Suede' },
+    ],
+  },
+  nitro: {
+    name: 'Nitrous Oxide System (NOS)',
+    desc: 'Expands nitro reservoir tank capacity & speeds up recharge rate',
+    levels: [
+      { level: 0, cost: 0, bonusCapacity: 0, label: 'Single Bottle NOS' },
+      { level: 1, cost: 110, bonusCapacity: 15, label: 'Dual Stage Injection' },
+      { level: 2, cost: 260, bonusCapacity: 30, label: 'High-Flow Solenoids' },
+      { level: 3, cost: 520, bonusCapacity: 50, label: 'Cryogenic Purge System' },
+      { level: 4, cost: 900, bonusCapacity: 75, label: 'Direct Port Hex Injectors' },
+    ],
+  },
+};
+
 
 export const INITIAL_ACHIEVEMENTS: Achievement[] = [
   {

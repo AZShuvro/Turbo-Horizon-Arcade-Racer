@@ -11,12 +11,16 @@ import {
   CameraView,
   WeatherType,
   TransmissionType,
+  MultiplayerPlayerInfo,
+  RemotePlayerTransform,
+  OpenWorldHudState,
 } from '../types/game';
-import { createPlayerCar } from './proceduralModels';
+import { createPlayerCar, createUsernameTag } from './proceduralModels';
 import { TrackManager } from './trackManager';
 import { ParticleSystem } from './particleSystem';
 import { CarController } from './carController';
 import { OpenWorldManager } from './OpenWorldManager';
+import { ZONE_LABELS, getWorldHeightAt } from './openWorldData';
 import { soundManager } from '../audio/soundManager';
 
 const _camTarget = new THREE.Vector3();
@@ -50,6 +54,17 @@ export class GameEngine {
   public weather: WeatherType = 'sunset';
   public cameraView: CameraView = 'thirdPerson';
 
+  // Photo Mode & Crash Cam
+  public isPhotoMode = false;
+  public photoFov = 65;
+  public photoFilter: 'normal' | 'vintage' | 'cyber' | 'noir' = 'normal';
+  public photoOrbitX = 0;
+  public photoOrbitY = 0;
+  public crashCamTimer = 0; // seconds of cinematic slow-mo
+
+  // Racing Position / Rank
+  public raceRank = 1;
+
   // Camera Shake & Hitstop
   private cameraShakeIntensity = 0;
   private hitstopTimer = 0; // seconds
@@ -60,6 +75,34 @@ export class GameEngine {
   // Police Chase state
   public policeSurvivalTimer = 0;
   private sirenSoundCooldown = 0;
+
+  // Player Profile & Online Multiplayer state
+  public playerUsername = 'DRIVER 01';
+  public playerTagColor = '#f59e0b';
+  private playerUsernameSprite: THREE.Sprite | null = null;
+  public onlinePhase: 'countdown' | 'racing' | 'finished' = 'racing';
+  public onlineLap = 1;
+  public onlineTotalLaps = 3;
+  public onlineLapDistance = 1200;
+  private lastTransformEmitTime = 0;
+  private onlineFinishEmitted = false;
+  private remoteCars = new Map<
+    string,
+    {
+      info: MultiplayerPlayerInfo;
+      mesh: THREE.Group;
+      targetX: number;
+      targetY: number;
+      targetZ: number;
+      targetRotY: number;
+      targetSteer: number;
+      speed: number;
+      distance: number;
+      lap: number;
+      finished: boolean;
+      finishRank: number;
+    }
+  >();
 
   // Score & Gameplay Metrics
   public score = 0;
@@ -96,10 +139,37 @@ export class GameEngine {
     posX?: number;
     posZ?: number;
     heading?: number;
+    openWorld?: OpenWorldHudState;
+    raceRank?: number;
+    totalRacers?: number;
+    lap?: number;
+    totalLaps?: number;
+    leaderboard?: Array<{
+      id: string;
+      username: string;
+      distance: number;
+      lap: number;
+      finished: boolean;
+      finishRank: number;
+      isLocal: boolean;
+      color: string;
+    }>;
   }) => void;
   public onFloatingText?: (text: FloatingText) => void;
   public onGameOver?: (reason: string) => void;
   public onAchievementTrigger?: (id: string) => void;
+  public onLocalTransform?: (state: {
+    x: number;
+    y: number;
+    z: number;
+    rotY: number;
+    steer: number;
+    speed: number;
+    d: number;
+    lap: number;
+  }) => void;
+  public onOnlineFinish?: () => void;
+
 
   constructor(container: HTMLElement, initialCar: CarStats, quality: GraphicsQuality = 'balanced') {
     this.container = container;
@@ -160,6 +230,7 @@ export class GameEngine {
     // 5b. Open World Manager
     this.openWorldManager = new OpenWorldManager(this.scene);
     this.openWorldManager.setVisible(false);
+    this.openWorldManager.setQuality(quality);
     this.openWorldManager.onZoneChange = (_zone, zoneTitle) => {
       this.onFloatingText?.({
         id: Date.now(),
@@ -169,15 +240,21 @@ export class GameEngine {
         timestamp: Date.now(),
       });
     };
-    this.openWorldManager.onDiscovery = (d) => {
-      this.score += d.score;
+    this.openWorldManager.onActivityReward = (reward) => {
+      this.score += reward.score;
+      if (reward.coins > 0) {
+        this.coins += reward.coins;
+      }
       this.onFloatingText?.({
-        id: Date.now(),
-        text: `${d.name.toUpperCase()}! +${d.score}`,
-        type: d.type === 'trophy' ? 'combo' : 'nitro',
-        score: d.score,
+        id: Date.now() + Math.random(),
+        text: reward.coins > 0 ? `${reward.title} (+${reward.coins} COINS)` : reward.title,
+        type: reward.kind === 'race' || reward.kind === 'hub' ? 'checkpoint' : reward.kind === 'speedtrap' ? 'speedtrap' : 'combo',
+        score: reward.score,
         timestamp: Date.now(),
       });
+    };
+    this.openWorldManager.onAchievementTrigger = (id) => {
+      this.onAchievementTrigger?.(id);
     };
 
     // 6. Particle System
@@ -192,6 +269,7 @@ export class GameEngine {
       initialCar.stripeColor
     );
     this.scene.add(this.playerCarGroup);
+    this.attachPlayerUsernameSprite();
 
     // 8. Car Controller
     this.carController = new CarController(
@@ -204,7 +282,60 @@ export class GameEngine {
 
     this.bindControllerEvents();
     this.setupResizeListener();
+    this.setupPointerControls();
   }
+
+  private isDragging = false;
+  private lastPointerX = 0;
+  private lastPointerY = 0;
+
+  private setupPointerControls() {
+    const onPointerDown = (e: PointerEvent) => {
+      this.isDragging = true;
+      this.lastPointerX = e.clientX;
+      this.lastPointerY = e.clientY;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!this.isDragging) return;
+      const dx = e.clientX - this.lastPointerX;
+      const dy = e.clientY - this.lastPointerY;
+      this.lastPointerX = e.clientX;
+      this.lastPointerY = e.clientY;
+
+      if (this.isPhotoMode) {
+        this.photoOrbitX -= dx * 0.008;
+        this.photoOrbitY = Math.max(-1.0, Math.min(1.5, this.photoOrbitY - dy * 0.008));
+      } else if (this.gameState === 'title') {
+        this.titleOrbitAngle -= dx * 0.008;
+      }
+    };
+
+    const onPointerUp = () => {
+      this.isDragging = false;
+    };
+
+    this.container.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  }
+
+  public takeScreenshot(): string {
+    this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement.toDataURL('image/png');
+  }
+
+  public honkHorn() {
+    soundManager.playHorn();
+    this.onFloatingText?.({
+      id: Date.now(),
+      text: '📢 BEEP BEEP!',
+      type: 'powerup',
+      score: 10,
+      timestamp: Date.now(),
+    });
+  }
+
 
   public setQuality(quality: GraphicsQuality) {
     this.quality = quality;
@@ -212,22 +343,72 @@ export class GameEngine {
       this.renderer.setPixelRatio(1.0);
       this.renderer.shadowMap.enabled = false;
       if (this.dirLight) this.dirLight.castShadow = false;
+      this.camera.far = 265;
     } else if (quality === 'balanced') {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = THREE.PCFShadowMap;
       if (this.dirLight) this.dirLight.castShadow = true;
+      this.camera.far = 400;
     } else {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       if (this.dirLight) this.dirLight.castShadow = true;
+      this.camera.far = 620;
     }
+    this.camera.updateProjectionMatrix();
+    this.openWorldManager?.setQuality(quality);
+  }
+
+  public setGpsWaypoint(x: number, z: number, label = 'Custom Pin') {
+    this.openWorldManager.setGpsWaypoint(x, z, label);
+    this.onFloatingText?.({
+      id: Date.now(),
+      text: `GPS LOCKED: ${label.toUpperCase()}`,
+      type: 'checkpoint',
+      score: 0,
+      timestamp: Date.now(),
+    });
+  }
+
+  public clearGpsWaypoint() {
+    this.openWorldManager.clearGpsWaypoint();
+  }
+
+  public fastTravelToHub(hubId: string) {
+    const dest = this.openWorldManager.fastTravelToHub(hubId);
+    if (!dest) return false;
+    const destY = getWorldHeightAt(dest.x, dest.z, 8.0);
+    this.carController.x = dest.x;
+    this.carController.z = dest.z;
+    this.carController.y = destY;
+    this.carController.vy = 0;
+    this.carController.isAirborne = false;
+    this.carController.headingAngle = dest.heading;
+    this.carController.speed = 0;
+    this.carController.mesh.position.set(dest.x, destY, dest.z);
+    this.carController.mesh.rotation.set(0, dest.heading, 0);
+    this.onFloatingText?.({
+      id: Date.now(),
+      text: `FAST TRAVELED: ${dest.name.toUpperCase()}`,
+      type: 'checkpoint',
+      score: 0,
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+
+  public cancelStreetRace() {
+    this.openWorldManager.cancelStreetRace();
   }
 
   // --- CAMERA ANGLE VIEW TOGGLES ---
   public setCameraView(view: CameraView) {
     this.cameraView = view;
+    if (this.playerUsernameSprite) {
+      this.playerUsernameSprite.visible = view !== 'hood';
+    }
     this.onFloatingText?.({
       id: Date.now(),
       text: `CAMERA: ${view === 'thirdPerson' ? 'THIRD PERSON' : view === 'hood' ? 'HOOD / COCKPIT' : 'TOP-DOWN ARCADE'}`,
@@ -247,6 +428,7 @@ export class GameEngine {
   public setWeather(weather: WeatherType) {
     this.weather = weather;
     this.trackManager.setWeather(weather);
+    this.openWorldManager?.setWeather(weather);
 
     if (weather === 'sunny') {
       this.scene.background = new THREE.Color(0x38bdf8); // Sky blue
@@ -320,7 +502,34 @@ export class GameEngine {
     }
   }
 
+  private disposeSprite(sprite: THREE.Sprite | null) {
+    if (!sprite) return;
+    sprite.parent?.remove(sprite);
+    const mat = sprite.material as THREE.SpriteMaterial;
+    mat.map?.dispose();
+    mat.dispose();
+  }
+
+  private attachPlayerUsernameSprite() {
+    this.disposeSprite(this.playerUsernameSprite);
+    this.playerUsernameSprite = createUsernameTag(
+      this.playerUsername,
+      this.playerTagColor,
+      true
+    );
+    this.playerUsernameSprite.visible = this.cameraView !== 'hood';
+    this.playerCarGroup.add(this.playerUsernameSprite);
+  }
+
+  public updatePlayerProfileTag(username: string, tagColor = '#f59e0b') {
+    this.playerUsername = username || 'DRIVER 01';
+    this.playerTagColor = tagColor || '#f59e0b';
+    this.attachPlayerUsernameSprite();
+  }
+
   public changePlayerCar(carStats: CarStats) {
+    this.disposeSprite(this.playerUsernameSprite);
+    this.playerUsernameSprite = null;
     this.scene.remove(this.playerCarGroup);
     this.playerCarGroup = createPlayerCar(
       carStats.id,
@@ -330,7 +539,117 @@ export class GameEngine {
       carStats.stripeColor
     );
     this.scene.add(this.playerCarGroup);
+    this.attachPlayerUsernameSprite();
     this.carController.setCar(this.playerCarGroup, carStats);
+  }
+
+  public setOnlineRacePhase(phase: 'countdown' | 'racing' | 'finished') {
+    this.onlinePhase = phase;
+  }
+
+  public clearRemoteCars() {
+    for (const remote of this.remoteCars.values()) {
+      const tag = remote.mesh.getObjectByName('username-tag') as THREE.Sprite | undefined;
+      if (tag) this.disposeSprite(tag);
+      this.scene.remove(remote.mesh);
+    }
+    this.remoteCars.clear();
+  }
+
+  public syncRemotePlayersMeta(players: MultiplayerPlayerInfo[], selfId: string | null) {
+    const activeIds = new Set(players.map((p) => p.id));
+
+    for (const [id, remote] of this.remoteCars.entries()) {
+      if (!activeIds.has(id) || id === selfId) {
+        const tag = remote.mesh.getObjectByName('username-tag') as THREE.Sprite | undefined;
+        if (tag) this.disposeSprite(tag);
+        this.scene.remove(remote.mesh);
+        this.remoteCars.delete(id);
+      }
+    }
+
+    const laneOffsets = [-4.5, -1.5, 1.5, 4.5];
+    players.forEach((p, idx) => {
+      if (p.id === selfId) return;
+      const existing = this.remoteCars.get(p.id);
+      if (!existing) {
+        const mesh = createPlayerCar(
+          p.car.id,
+          p.car.primaryColor,
+          p.car.accentColor,
+          p.car.decalType,
+          p.car.stripeColor
+        );
+        const tag = createUsernameTag(p.username, '#38bdf8', false);
+        mesh.add(tag);
+        const startX = laneOffsets[idx % 4];
+        mesh.position.set(startX, 0, 0);
+        this.scene.add(mesh);
+
+        this.remoteCars.set(p.id, {
+          info: p,
+          mesh,
+          targetX: startX,
+          targetY: 0,
+          targetZ: 0,
+          targetRotY: 0,
+          targetSteer: 0,
+          speed: 0,
+          distance: p.distance || 0,
+          lap: p.lap || 1,
+          finished: p.finished,
+          finishRank: p.finishRank || 0,
+        });
+      } else {
+        const carChanged =
+          existing.info.car.id !== p.car.id ||
+          existing.info.car.primaryColor !== p.car.primaryColor ||
+          existing.info.car.decalType !== p.car.decalType ||
+          existing.info.username !== p.username;
+        existing.info = p;
+        existing.finished = p.finished;
+        existing.finishRank = p.finishRank || existing.finishRank;
+
+        if (carChanged) {
+          const prevPos = existing.mesh.position.clone();
+          const prevRotY = existing.mesh.rotation.y;
+          const oldTag = existing.mesh.getObjectByName('username-tag') as THREE.Sprite | undefined;
+          if (oldTag) this.disposeSprite(oldTag);
+          this.scene.remove(existing.mesh);
+
+          const mesh = createPlayerCar(
+            p.car.id,
+            p.car.primaryColor,
+            p.car.accentColor,
+            p.car.decalType,
+            p.car.stripeColor
+          );
+          mesh.add(createUsernameTag(p.username, '#38bdf8', false));
+          mesh.position.copy(prevPos);
+          mesh.rotation.y = prevRotY;
+          this.scene.add(mesh);
+          existing.mesh = mesh;
+        }
+      }
+    });
+  }
+
+  public applyRemoteTransforms(transforms: RemotePlayerTransform[], selfId: string | null) {
+    for (const tr of transforms) {
+      if (tr.id === selfId) continue;
+      const remote = this.remoteCars.get(tr.id);
+      if (!remote) continue;
+      remote.targetX = tr.x;
+      remote.targetY = tr.y;
+      remote.targetZ = tr.z;
+      remote.targetRotY = tr.rotY;
+      remote.targetSteer = tr.steer;
+      remote.speed = tr.speed;
+      remote.distance = tr.distance;
+      remote.lap = tr.lap;
+      remote.finished = tr.finished;
+      remote.finishRank = tr.finishRank;
+    }
   }
 
   private bindControllerEvents() {
@@ -347,8 +666,9 @@ export class GameEngine {
     };
 
     this.carController.onCrash = () => {
-      this.hitstopTimer = 0.06;
-      this.cameraShakeIntensity = 0.85;
+      this.hitstopTimer = 0.08;
+      this.cameraShakeIntensity = 0.95;
+      this.crashCamTimer = 1.0; // Cinematic slow motion crash cam!
     };
 
     this.carController.onCheckpointPassed = () => {
@@ -384,7 +704,15 @@ export class GameEngine {
     window.addEventListener('resize', onResize);
   }
 
-  public start(mode: GameMode = 'arcade') {
+  public start(
+    mode: GameMode = 'arcade',
+    options?: {
+      startX?: number;
+      totalLaps?: number;
+      lapDistance?: number;
+      countdownActive?: boolean;
+    }
+  ) {
     this.gameMode = mode;
     this.score = 0;
     this.distance = 0;
@@ -394,8 +722,14 @@ export class GameEngine {
     this.timeLeft = mode === 'timeAttack' ? 45 : 35;
     this.hitstopTimer = 0;
     this.cameraShakeIntensity = 0;
+    this.onlineLap = 1;
+    this.onlineTotalLaps = options?.totalLaps ?? 3;
+    this.onlineLapDistance = options?.lapDistance ?? 1200;
+    this.onlineFinishEmitted = false;
+    this.onlinePhase = options?.countdownActive ? 'countdown' : 'racing';
+    this.lastTransformEmitTime = 0;
 
-    const isOW = mode === 'openWorld';
+    const isOW = mode === 'openWorld' || mode === 'zen';
     this.carController.isOpenWorld = isOW;
     this.openWorldManager.setVisible(isOW);
 
@@ -403,14 +737,26 @@ export class GameEngine {
       c.visible = !isOW;
     }
 
+    const startX = options?.startX ?? 0;
+
     if (isOW) {
+      this.clearRemoteCars();
       this.openWorldManager.reset();
-      this.carController.reset(0, 0, 0);
-      this.scene.background = new THREE.Color(0x38bdf8);
-      this.scene.fog = new THREE.FogExp2(0xbae6fd, 0.0035);
+      this.openWorldManager.setQuality(this.quality);
+      this.openWorldManager.setWeather(this.weather);
+      // Spawn cleanly at Central Crossroads Hub facing Downtown Cyber Metro
+      this.carController.reset(0, 140, -Math.PI * 0.5);
+      this.setWeather(this.weather);
+      const fogDensity = this.quality === 'low' ? 0.0058 : this.quality === 'balanced' ? 0.0038 : 0.0026;
+      if (this.scene.fog instanceof THREE.FogExp2) {
+        this.scene.fog.density = fogDensity;
+      }
     } else {
+      if (mode !== 'online') {
+        this.clearRemoteCars();
+      }
       this.trackManager.reset();
-      this.carController.reset(0, 0, 0);
+      this.carController.reset(startX, 0, 0);
       this.setWeather(this.weather);
     }
 
@@ -421,6 +767,7 @@ export class GameEngine {
   public resetToTitle() {
     this.gameState = 'title';
     this.carController.isOpenWorld = false;
+    this.clearRemoteCars();
     this.openWorldManager.setVisible(false);
     for (const c of (this.trackManager as any).roadChunks) {
       c.visible = true;
@@ -453,6 +800,22 @@ export class GameEngine {
     this.lastTime = now;
     const dt = Math.min(rawDt, 0.05);
 
+    // Photo Mode Active: freeze physics & game clock, orbit camera around car
+    if (this.isPhotoMode) {
+      const cx = this.carController.x;
+      const cy = this.carController.y;
+      const cz = this.carController.z;
+      const radius = 6.2;
+      this.camera.position.x = cx + Math.sin(this.photoOrbitX) * radius;
+      this.camera.position.z = cz - Math.cos(this.photoOrbitX) * radius;
+      this.camera.position.y = cy + 1.8 + this.photoOrbitY * 2.2;
+      this.camera.fov = this.photoFov;
+      this.camera.updateProjectionMatrix();
+      this.camera.lookAt(cx, cy + 0.8, cz);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
     if (this.hitstopTimer > 0) {
       this.hitstopTimer -= dt;
       this.renderer.render(this.scene, this.camera);
@@ -460,27 +823,109 @@ export class GameEngine {
     }
 
     if (this.gameState === 'playing') {
+      // Crash Cam Slow-Motion replay
+      let effectiveDt = dt;
+      if (this.crashCamTimer > 0) {
+        this.crashCamTimer -= dt;
+        effectiveDt = dt * 0.28; // 0.28x dramatic slow motion!
+      }
+
+      const isOnline = this.gameMode === 'online';
+      const lockedByCountdown = isOnline && this.onlinePhase === 'countdown';
+      const activeInput: PlayerInput = lockedByCountdown
+        ? {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false,
+            drift: false,
+            nitro: false,
+            clutch: input.clutch,
+            upshiftJustPressed: false,
+            downshiftJustPressed: false,
+          }
+        : input;
+
       // 1. Update Car Physics
-      this.carController.update(input, dt);
+      this.carController.update(activeInput, effectiveDt);
 
       const carX = this.carController.x;
       const carY = this.carController.y;
       const carZ = this.carController.z;
       const speedKmH = Math.round(Math.abs(this.carController.speed) * 3.6);
 
-      const isOW = this.gameMode === 'openWorld';
+      const isOW = this.gameMode === 'openWorld' || this.gameMode === 'zen';
       const isPolice = this.gameMode === 'policeChase';
 
       if (isOW) {
-        this.openWorldManager.update(carX, carZ, speedKmH, dt);
+        this.openWorldManager.update(
+          carX,
+          carY,
+          carZ,
+          this.carController.headingAngle,
+          speedKmH,
+          this.carController.isDrifting,
+          effectiveDt
+        );
       } else {
-        this.trackManager.update(carZ, dt, carX, this.carController.speed, isPolice);
+        this.trackManager.update(carZ, effectiveDt, carX, this.carController.speed, isPolice, isOnline);
+
+        // Speed Trap Camera Trigger (>160 km/h)
+        for (const item of this.trackManager.pickups) {
+          if (item.active && item.type === 'speedtrap') {
+            if (Math.abs(item.z - carZ) < 3.8 && Math.abs(item.x - carX) < 5.0) {
+              const ud = (item.meshGroup as any).userData;
+              if (!ud?.triggered) {
+                if (!ud) (item.meshGroup as any).userData = {};
+                (item.meshGroup as any).userData.triggered = true;
+                if (speedKmH >= 160) {
+                  soundManager.playSpeedTrapFlash();
+                  this.score += 450;
+                  this.onFloatingText?.({
+                    id: Date.now(),
+                    text: `📸 SPEED TRAP: ${speedKmH} KM/H (+450 PTS)!`,
+                    type: 'speedtrap',
+                    score: 450,
+                    timestamp: Date.now(),
+                  });
+                  this.onAchievementTrigger?.('speed-demon');
+                }
+              }
+            }
+          }
+        }
+
+        // Interpolate Remote Opponent Cars in Online Mode
+        if (isOnline) {
+          for (const remote of this.remoteCars.values()) {
+            remote.mesh.position.x = THREE.MathUtils.damp(remote.mesh.position.x, remote.targetX, 14, dt);
+            remote.mesh.position.y = THREE.MathUtils.damp(remote.mesh.position.y, remote.targetY, 14, dt);
+            remote.mesh.position.z = THREE.MathUtils.damp(remote.mesh.position.z, remote.targetZ, 14, dt);
+            remote.mesh.rotation.y = THREE.MathUtils.damp(remote.mesh.rotation.y, remote.targetRotY, 14, dt);
+
+            const wheels = (remote.mesh as any).userData?.wheels as THREE.Group[] | undefined;
+            if (wheels) {
+              const spin = (remote.speed * dt) / 0.36;
+              for (const w of wheels) {
+                w.rotation.x += spin;
+              }
+              if (wheels.length >= 2) {
+                wheels[0].rotation.y = THREE.MathUtils.damp(wheels[0].rotation.y, remote.targetSteer * 0.8, 12, dt);
+                wheels[1].rotation.y = THREE.MathUtils.damp(wheels[1].rotation.y, remote.targetSteer * 0.8, 12, dt);
+              }
+            }
+          }
+        } else {
+          // Live Race Ranking (1st to 4th) against traffic vehicles
+          const carsAhead = this.trackManager.traffic.filter((c) => c.active && c.z > carZ).length;
+          this.raceRank = Math.max(1, Math.min(4, 1 + (carsAhead % 4)));
+        }
       }
 
       // 2. Police Chase Logic & Survival
       if (isPolice) {
-        this.policeSurvivalTimer += dt;
-        this.sirenSoundCooldown -= dt;
+        this.policeSurvivalTimer += effectiveDt;
+        this.sirenSoundCooldown -= effectiveDt;
 
         // Siren audio when cop nearby
         if (this.sirenSoundCooldown <= 0) {
@@ -505,14 +950,14 @@ export class GameEngine {
       }
 
       // 4. Update Particles
-      this.particleSystem.update(dt);
+      this.particleSystem.update(effectiveDt);
 
       // 5. Update Game Metrics & Timer
-      this.distance += Math.floor(Math.abs(this.carController.speed) * dt);
-      this.score += Math.floor(Math.abs(this.carController.speed) * 0.4 * dt * 10);
+      this.distance += Math.floor(Math.abs(this.carController.speed) * effectiveDt);
+      this.score += Math.floor(Math.abs(this.carController.speed) * 0.4 * effectiveDt * 10);
 
       if (this.gameMode === 'arcade' || this.gameMode === 'timeAttack') {
-        this.timeLeft -= dt;
+        this.timeLeft -= effectiveDt;
         if (this.timeLeft <= 0) {
           this.timeLeft = 0;
           this.gameState = 'gameover';
@@ -521,10 +966,105 @@ export class GameEngine {
         }
       }
 
+      // Online Multiplayer Laps, Live Leaderboard & 25Hz Transform Broadcast
+      let onlineLeaderboard:
+        | Array<{
+            id: string;
+            username: string;
+            distance: number;
+            lap: number;
+            finished: boolean;
+            finishRank: number;
+            isLocal: boolean;
+            color: string;
+          }>
+        | undefined;
+      let totalRacersCount = 4;
+
+      if (isOnline) {
+        const computedLap = Math.min(
+          this.onlineTotalLaps,
+          1 + Math.floor(this.distance / this.onlineLapDistance)
+        );
+        if (computedLap > this.onlineLap && this.onlinePhase === 'racing') {
+          this.onlineLap = computedLap;
+          soundManager.playCheckpoint();
+          this.onFloatingText?.({
+            id: Date.now(),
+            text:
+              this.onlineLap === this.onlineTotalLaps
+                ? 'FINAL LAP!'
+                : `LAP ${this.onlineLap} / ${this.onlineTotalLaps}`,
+            type: 'checkpoint',
+            score: 500,
+            timestamp: Date.now(),
+          });
+        }
+
+        const totalGoal = this.onlineTotalLaps * this.onlineLapDistance;
+        if (this.distance >= totalGoal && !this.onlineFinishEmitted && this.onlinePhase === 'racing') {
+          this.onlineFinishEmitted = true;
+          this.onlinePhase = 'finished';
+          soundManager.playAchievementUnlock();
+          this.onOnlineFinish?.();
+        }
+
+        if (now - this.lastTransformEmitTime >= 40 && this.onlinePhase === 'racing') {
+          this.lastTransformEmitTime = now;
+          this.onLocalTransform?.({
+            x: carX,
+            y: carY,
+            z: carZ,
+            rotY: this.playerCarGroup.rotation.y,
+            steer: this.carController.steerAngle,
+            speed: this.carController.speed,
+            d: this.distance,
+            lap: this.onlineLap,
+          });
+        }
+
+        const entries = [
+          {
+            id: 'local',
+            username: this.playerUsername,
+            distance: this.distance,
+            lap: this.onlineLap,
+            finished: this.onlineFinishEmitted,
+            finishRank: 0,
+            isLocal: true,
+            color: this.playerTagColor,
+          },
+          ...Array.from(this.remoteCars.values()).map((r) => ({
+            id: r.info.id,
+            username: r.info.username,
+            distance: r.distance,
+            lap: r.lap,
+            finished: r.finished,
+            finishRank: r.finishRank || 0,
+            isLocal: false,
+            color: r.info.car.primaryColor,
+          })),
+        ];
+
+        entries.sort((a, b) => {
+          if (a.finished && b.finished && a.finishRank && b.finishRank) {
+            return a.finishRank - b.finishRank;
+          }
+          if (a.finished !== b.finished) return a.finished ? -1 : 1;
+          return b.distance - a.distance;
+        });
+
+        onlineLeaderboard = entries;
+        totalRacersCount = entries.length;
+        const localIdx = entries.findIndex((e) => e.isLocal);
+        this.raceRank = localIdx >= 0 ? localIdx + 1 : 1;
+      }
+
       // Heat level calculation (1 to 5 stars)
       const heatLevel = isPolice ? Math.min(5, 1 + Math.floor(this.policeSurvivalTimer / 12)) : undefined;
 
       // Notify React HUD
+      const openWorldData = isOW ? this.openWorldManager.getHudState(carX, carZ) : undefined;
       this.onScoreUpdate?.({
         score: this.score,
         speed: speedKmH,
@@ -545,19 +1085,20 @@ export class GameEngine {
         doorsOpen: this.carController.doorsOpen,
         trunkOpen: this.carController.trunkOpen,
         heatLevel,
-        zoneName: isOW
-          ? this.openWorldManager.currentZone === 'city'
-            ? 'Downtown Metropolis'
-            : this.openWorldManager.currentZone === 'beach'
-            ? 'Sunset Golden Beach'
-            : 'Canyon Mountains & Summit'
-          : undefined,
-        trophiesFound: isOW ? this.openWorldManager.trophiesCollected : undefined,
-        totalTrophies: isOW ? this.openWorldManager.totalTrophies : undefined,
+        raceRank: openWorldData?.activeRace ? openWorldData.activeRace.rank : this.raceRank,
+        totalRacers: openWorldData?.activeRace ? openWorldData.activeRace.totalRacers : totalRacersCount,
+        lap: isOnline ? this.onlineLap : undefined,
+        totalLaps: isOnline ? this.onlineTotalLaps : undefined,
+        leaderboard: onlineLeaderboard,
+        zoneName: isOW ? ZONE_LABELS[this.openWorldManager.currentZone] : undefined,
+        trophiesFound: isOW ? this.openWorldManager.tokensCollected : undefined,
+        totalTrophies: isOW ? this.openWorldManager.totalTokens : undefined,
         posX: Math.round(carX),
         posZ: Math.round(carZ),
         heading: Math.round((((this.carController.headingAngle * 180) / Math.PI) % 360 + 360) % 360),
+        openWorld: openWorldData,
       });
+
 
       // 6. Dynamic Camera Follow with 3 Camera Modes
       const speedNorm = Math.min(1.0, this.carController.speed / 50);
@@ -582,8 +1123,14 @@ export class GameEngine {
         }
       } else if (this.cameraView === 'topDown') {
         // --- TOP-DOWN ARCADE CAMERA ---
-        _idealOffset.set(carX, carY + 22, carZ - 3);
-        _camTarget.set(carX, carY, carZ + 14);
+        if (isOW) {
+          const h = this.carController.headingAngle;
+          _idealOffset.set(carX - Math.sin(h) * 6, carY + 26, carZ - Math.cos(h) * 6);
+          _camTarget.set(carX + Math.sin(h) * 10, carY, carZ + Math.cos(h) * 10);
+        } else {
+          _idealOffset.set(carX, carY + 22, carZ - 3);
+          _camTarget.set(carX, carY, carZ + 14);
+        }
       } else {
         // --- THIRD-PERSON CHASE (DEFAULT) ---
         if (isOW) {

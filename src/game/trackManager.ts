@@ -15,6 +15,7 @@ import {
   createOilSlick,
   createRoadBarricade,
   createTrafficCone,
+  createSpeedTrapCamera,
 } from './proceduralModels';
 
 const ROAD_WIDTH = 14;
@@ -427,6 +428,22 @@ export class TrackManager {
         rotation: 0,
       });
     }
+
+    // 4 Speed Trap Radar Camera Stations
+    for (let i = 0; i < 4; i++) {
+      const trapMesh = createSpeedTrapCamera();
+      trapMesh.position.set(0, -50, 0);
+      this.scene.add(trapMesh);
+      this.pickups.push({
+        id: 70 + i,
+        type: 'speedtrap',
+        x: 0,
+        z: -100,
+        active: false,
+        meshGroup: trapMesh,
+        rotation: 0,
+      });
+    }
   }
 
   public spawnCheckpointAt(z: number) {
@@ -441,7 +458,8 @@ export class TrackManager {
     dt: number,
     playerX = 0,
     playerSpeed = 0,
-    isPoliceChase = false
+    isPoliceChase = false,
+    isOnline = false
   ) {
     // 1. Recycle road chunks that fall behind player
     for (const chunk of this.roadChunks) {
@@ -454,7 +472,7 @@ export class TrackManager {
         this.chunkIndex++;
 
         // Spawn traffic or items ahead
-        this.maybeSpawnEntitiesAhead(newZ, isPoliceChase);
+        this.maybeSpawnEntitiesAhead(newZ, isPoliceChase, isOnline);
 
         // Checkpoint spawn every 700m
         if (newZ >= this.nextCheckpointDistance) {
@@ -498,9 +516,13 @@ export class TrackManager {
           car.meshGroup.rotation.y = Math.atan2(nextCurve - car.x, 4);
 
         } else {
-          // Standard civilian traffic flow
+          // Standard civilian traffic flow with dynamic lane changing
+          if (Math.random() < 0.005) {
+            car.lane = (car.lane + (Math.random() > 0.5 ? 1 : 2)) % 3;
+          }
           car.z += car.speed * dt;
-          car.x = this.getCurvatureAt(car.z) + LANES[car.lane];
+          const targetX = this.getCurvatureAt(car.z) + LANES[car.lane];
+          car.x = THREE.MathUtils.damp(car.x, targetX, 2.0, dt);
 
           const nextCurve = this.getCurvatureAt(car.z + 5) + LANES[car.lane];
           const angle = Math.atan2(nextCurve - car.x, 5);
@@ -554,9 +576,9 @@ export class TrackManager {
     }
   }
 
-  private maybeSpawnEntitiesAhead(z: number, isPoliceChase = false) {
-    // 1. Traffic Vehicle Spawning
-    const trafficSpawnChance = isPoliceChase ? 0.6 : 0.45;
+  private maybeSpawnEntitiesAhead(z: number, isPoliceChase = false, isOnline = false) {
+    // 1. Traffic Vehicle Spawning (skip random traffic in live PvP online races)
+    const trafficSpawnChance = isOnline ? 0 : isPoliceChase ? 0.6 : 0.45;
     if (Math.random() < trafficSpawnChance) {
       // In Police Chase, prioritize cop cruisers!
       let availableCar: TrafficCar | undefined;
@@ -584,6 +606,43 @@ export class TrackManager {
 
     // 2. Pickups & Hazards Spawning
     const roll = Math.random();
+    if (isOnline) {
+      // Clean fair pickups for online multiplayer (coins, nitro, ramps, speedtraps)
+      if (roll < 0.25) {
+        const lane = Math.floor(Math.random() * 3);
+        for (let i = 0; i < 3; i++) {
+          const coin = this.pickups.find((p) => p.type === 'coin' && !p.active);
+          if (coin) {
+            coin.active = true;
+            coin.z = z + i * 5;
+            coin.x = this.getCurvatureAt(coin.z) + LANES[lane];
+            coin.meshGroup.visible = true;
+            coin.meshGroup.position.set(coin.x, 1.0, coin.z);
+          }
+        }
+      } else if (roll < 0.42) {
+        const nitro = this.pickups.find((p) => p.type === 'nitro' && !p.active);
+        if (nitro) {
+          const lane = Math.floor(Math.random() * 3);
+          nitro.active = true;
+          nitro.z = z + 10;
+          nitro.x = this.getCurvatureAt(nitro.z) + LANES[lane];
+          nitro.meshGroup.visible = true;
+          nitro.meshGroup.position.set(nitro.x, 1.1, nitro.z);
+        }
+      } else if (roll < 0.5) {
+        const ramp = this.pickups.find((p) => p.type === 'ramp' && !p.active);
+        if (ramp) {
+          const lane = Math.floor(Math.random() * 3);
+          ramp.active = true;
+          ramp.z = z + 15;
+          ramp.x = this.getCurvatureAt(ramp.z) + LANES[lane];
+          ramp.meshGroup.visible = true;
+          ramp.meshGroup.position.set(ramp.x, 0, ramp.z);
+        }
+      }
+      return;
+    }
     if (roll < 0.3) {
       // Coins line (3 in sequence)
       const lane = Math.floor(Math.random() * 3);
@@ -662,6 +721,18 @@ export class TrackManager {
         ramp.x = this.getCurvatureAt(ramp.z) + LANES[lane];
         ramp.meshGroup.visible = true;
         ramp.meshGroup.position.set(ramp.x, 0, ramp.z);
+      }
+    } else if (roll < 0.96) {
+      // Roadside Speed Trap Camera Radar Station!
+      const trap = this.pickups.find((p) => p.type === 'speedtrap' && !p.active);
+      if (trap) {
+        trap.active = true;
+        trap.z = z + 22;
+        const sideOffset = Math.random() > 0.5 ? 5.8 : -5.8;
+        trap.x = this.getCurvatureAt(trap.z) + sideOffset;
+        (trap.meshGroup as any).userData = { triggered: false };
+        trap.meshGroup.visible = true;
+        trap.meshGroup.position.set(trap.x, 0, trap.z);
       }
     }
   }

@@ -1221,4 +1221,155 @@ export function createTrafficCone(): THREE.Group {
   return root;
 }
 
+/**
+ * 3D Speed Trap Camera Radar Station
+ */
+export function createSpeedTrapCamera(): THREE.Group {
+  const root = new THREE.Group();
+
+  const metalMat = getOrCreateMaterial('speedtrap-metal', () =>
+    new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.8, roughness: 0.3 })
+  );
+  const yellowMat = getOrCreateMaterial('speedtrap-yellow', () =>
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.4 })
+  );
+  const flashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+  // Main vertical mounting post
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 4.2, 8), metalMat);
+  pole.position.y = 2.1;
+
+  // Radar camera housing box
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.9, 0.6), yellowMat);
+  box.position.set(0, 3.8, 0);
+
+  // Twin optical lenses
+  const lensGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.25, 8);
+  lensGeo.rotateX(Math.PI / 2);
+  const lensMat = new THREE.MeshBasicMaterial({ color: 0x09090b });
+  const lensL = new THREE.Mesh(lensGeo, lensMat);
+  lensL.position.set(-0.22, 3.9, 0.3);
+  const lensR = new THREE.Mesh(lensGeo, lensMat);
+  lensR.position.set(0.22, 3.9, 0.3);
+
+  // Strobe Flash unit
+  const strobeGeo = new THREE.BoxGeometry(0.35, 0.18, 0.08);
+  const strobe = new THREE.Mesh(strobeGeo, flashMat);
+  strobe.position.set(0, 4.25, 0.3);
+
+  // Digital radar warning sign below
+  const signBack = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 0.08), metalMat);
+  signBack.position.set(0, 2.5, 0.2);
+
+  const signFace = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.1, 0.5),
+    new THREE.MeshBasicMaterial({ color: 0x0f172a })
+  );
+  signFace.position.set(0, 2.5, 0.25);
+
+  root.add(pole, box, lensL, lensR, strobe, signBack, signFace);
+  (root as any).userData = { strobe, isFlashing: false };
+  return root;
+}
+
+/**
+ * 3D Roadside Warning Chevron Street Sign
+ */
+export function createStreetSign(): THREE.Group {
+  const root = new THREE.Group();
+
+  const postMat = getOrCreateMaterial('sign-post', () =>
+    new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.7, roughness: 0.4 })
+  );
+  const signMat = getOrCreateMaterial('sign-face-chevron', () =>
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.4 })
+  );
+  const arrowMat = new THREE.MeshBasicMaterial({ color: 0x09090b });
+
+  // Post
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.2, 6), postMat);
+  post.position.y = 1.1;
+
+  // Diamond / Rectangular signboard
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.05), signMat);
+  board.position.set(0, 1.8, 0);
+
+  // Chevron arrow detail
+  const arrow = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.06), arrowMat);
+  arrow.position.set(0, 1.8, 0.01);
+
+  root.add(post, board, arrow);
+  return root;
+}
+
+/**
+ * Lightweight floating 3D driver nameplate sprite rendered above player & opponent cars
+ */
+export function createUsernameTag(
+  username: string,
+  tagColor = '#f59e0b',
+  isLocal = false
+): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+
+  if (ctx) {
+    ctx.clearRect(0, 0, 256, 64);
+
+    const w = 236;
+    const h = 44;
+    const x = 10;
+    const y = 10;
+    const r = 10;
+
+    ctx.fillStyle = isLocal ? 'rgba(9, 9, 11, 0.88)' : 'rgba(15, 23, 42, 0.88)';
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = tagColor;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.fillStyle = tagColor;
+    ctx.fillRect(x + 7, y + 8, 6, h - 16);
+
+    const safeName = (username || 'RACER').toUpperCase().slice(0, 14);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 24px Chakra Petch, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(safeName, 134, 33, 196);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  });
+
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(2.8, 0.7, 1);
+  sprite.position.set(0, 2.25, 0);
+  sprite.name = 'username-tag';
+  return sprite;
+}
+
+
 

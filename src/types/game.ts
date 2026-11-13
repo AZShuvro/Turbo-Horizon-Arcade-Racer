@@ -1,14 +1,111 @@
 export type GameState = 'title' | 'playing' | 'paused' | 'gameover';
 
-export type GameMode = 'arcade' | 'timeAttack' | 'zen' | 'openWorld' | 'policeChase';
+export type GameMode = 'arcade' | 'timeAttack' | 'zen' | 'openWorld' | 'policeChase' | 'online';
 
-export type WorldZone = 'city' | 'beach' | 'mountains';
+export type WorldZone = 'city' | 'beach' | 'mountains' | 'industrial';
 
 export type CameraView = 'thirdPerson' | 'hood' | 'topDown';
 
 export type WeatherType = 'sunny' | 'sunset' | 'night' | 'rain';
 
 export type TransmissionType = 'automatic' | 'manual';
+
+export type OpenWorldActivityType =
+  | 'street_race'
+  | 'drift_zone'
+  | 'speedtrap'
+  | 'ramp'
+  | 'token'
+  | 'crate';
+
+export interface OpenWorldRoadSegment {
+  id: string;
+  x1: number;
+  z1: number;
+  x2: number;
+  z2: number;
+  width: number;
+  zone: WorldZone;
+  kind: 'avenue' | 'highway' | 'switchback' | 'runway' | 'overpass' | 'tunnel' | 'pier' | 'shortcut';
+  elevation1?: number;
+  elevation2?: number;
+}
+
+export interface OpenWorldHub {
+  id: string;
+  name: string;
+  zone: WorldZone;
+  x: number;
+  z: number;
+  heading: number;
+  color: string;
+  discovered: boolean;
+}
+
+export interface OpenWorldActivity {
+  id: string;
+  name: string;
+  type: OpenWorldActivityType;
+  zone: WorldZone;
+  x: number;
+  z: number;
+  radius: number;
+  heading?: number;
+  rewardCoins: number;
+  rewardScore: number;
+  completed: boolean;
+  cooldownUntil?: number;
+  raceRoute?: Array<{ x: number; z: number }>;
+  targetDriftScore?: number;
+  meshGroup?: any;
+}
+
+export interface OpenWorldBlip {
+  x: number;
+  z: number;
+  kind: 'traffic' | 'cop' | 'rival' | 'checkpoint';
+}
+
+export interface OpenWorldWaypoint {
+  x: number;
+  z: number;
+  label: string;
+}
+
+export interface OpenWorldHudState {
+  currentZone: WorldZone;
+  zoneName: string;
+  tokensCollected: number;
+  totalTokens: number;
+  racesWon: number;
+  totalRaces: number;
+  waypoint: OpenWorldWaypoint | null;
+  waypointDist: number | null;
+  activeDriftZone: {
+    name: string;
+    score: number;
+    target: number;
+  } | null;
+  activeRace: {
+    name: string;
+    checkpointIdx: number;
+    totalCheckpoints: number;
+    rank: number;
+    totalRacers: number;
+    elapsed: number;
+  } | null;
+  hubs: OpenWorldHub[];
+  activities: Array<{
+    id: string;
+    name: string;
+    type: OpenWorldActivityType;
+    zone: WorldZone;
+    x: number;
+    z: number;
+    completed: boolean;
+  }>;
+  blips: OpenWorldBlip[];
+}
 
 export interface DiscoveryItem {
   id: string;
@@ -57,6 +154,16 @@ export interface CarStats {
   unlocked: boolean;
 }
 
+export type RadioStation = 'synthwave' | 'retroArcade' | 'lofi' | 'off';
+
+export type OnScreenControlSetting = 'auto' | 'force_on' | 'force_off';
+
+export interface CarUpgrades {
+  engine: number; // 0 to 4 (+5 km/h & +8% accel per lvl)
+  handling: number; // 0 to 4 (+8% drift grip & cornering per lvl)
+  nitro: number; // 0 to 4 (+10% nitro capacity & +12% refill rate per lvl)
+}
+
 export interface KeyBindings {
   steerLeft: string;
   steerRight: string;
@@ -74,6 +181,10 @@ export interface KeyBindings {
   doors: string;
   trunk: string;
   cameraToggle: string;
+  radio: string;
+  photoMode: string;
+  horn: string;
+  worldMap: string;
 }
 
 export interface PlayerInput {
@@ -105,7 +216,7 @@ export interface TrafficCar {
 
 export interface PickupItem {
   id: number;
-  type: 'coin' | 'nitro' | 'shield' | 'ramp' | 'magnet' | 'oil' | 'barricade';
+  type: 'coin' | 'nitro' | 'shield' | 'ramp' | 'magnet' | 'oil' | 'barricade' | 'speedtrap';
   x: number;
   z: number;
   active: boolean;
@@ -113,10 +224,24 @@ export interface PickupItem {
   rotation: number;
 }
 
+export interface RivalCar {
+
+  id: number;
+  name: string;
+  color: string;
+  x: number;
+  z: number;
+  targetX: number;
+  speed: number;
+  maxSpeed: number;
+  meshGroup: any;
+  rank: number;
+}
+
 export interface FloatingText {
   id: number;
   text: string;
-  type: 'nearMiss' | 'drift' | 'checkpoint' | 'combo' | 'nitro' | 'achievement' | 'powerup' | 'hazard' | 'police';
+  type: 'nearMiss' | 'drift' | 'checkpoint' | 'combo' | 'nitro' | 'achievement' | 'powerup' | 'hazard' | 'police' | 'speedtrap' | 'rival';
   score: number;
   timestamp: number;
 }
@@ -149,7 +274,62 @@ export interface GameSettings {
   cameraView: CameraView;
   weather: WeatherType;
   quality: GraphicsQuality;
+  touchControls: OnScreenControlSetting;
   keyBindings: KeyBindings;
 }
 
 export type BiomeType = 'sunset' | 'neon' | 'desert' | 'alpine';
+
+export interface PlayerProfile {
+  username: string;
+  tagColor: string;
+  racesCompleted: number;
+  wins: number;
+}
+
+export interface MultiplayerCarConfig {
+  id: string;
+  name: string;
+  primaryColor: string;
+  accentColor: string;
+  decalType: DecalType;
+  stripeColor: string;
+}
+
+export interface MultiplayerPlayerInfo {
+  id: string;
+  username: string;
+  car: MultiplayerCarConfig;
+  distance: number;
+  lap: number;
+  finished: boolean;
+  finishTime: number | null;
+  finishRank: number | null;
+  isHost: boolean;
+}
+
+export interface MultiplayerRoomState {
+  code: string;
+  hostId: string;
+  trackId: TrackId;
+  totalLaps: number;
+  lapDistance: number;
+  status: 'lobby' | 'countdown' | 'racing' | 'finished';
+  players: MultiplayerPlayerInfo[];
+}
+
+export interface RemotePlayerTransform {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  rotY: number;
+  steer: number;
+  speed: number;
+  distance: number;
+  lap: number;
+  finished: boolean;
+  finishRank: number;
+}
+
+

@@ -3,6 +3,8 @@
  * Zero external audio files required - works completely offline with 0 network latency.
  */
 
+import { RadioStation } from '../types/game';
+
 class SoundManager {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
@@ -11,6 +13,9 @@ class SoundManager {
   private sfxGain: GainNode | null = null;
   private musicGain: GainNode | null = null;
 
+  // Radio Station State
+  private currentStation: RadioStation = 'synthwave';
+
   // Engine synth nodes
   private engineOsc1: OscillatorNode | null = null;
   private engineOsc2: OscillatorNode | null = null;
@@ -18,6 +23,7 @@ class SoundManager {
   private engineGain: GainNode | null = null;
   private engineFilter: BiquadFilterNode | null = null;
   private isEngineRunning: boolean = false;
+
 
   // Drift squeal synth nodes
   private driftNoiseNode: AudioBufferSourceNode | null = null;
@@ -709,20 +715,214 @@ class SoundManager {
     } catch {}
   }
 
+  // --- SFX: EXHAUST POP / BACKFIRE SPUTTER ---
+  public playExhaustPop() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      // 1. High transient crackle
+      const buffer = this.createNoiseBuffer();
+      if (buffer) {
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(1400, now);
+        filter.Q.setValueAtTime(3.0, now);
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.42, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.sfxGain);
+        noise.start(now);
+        noise.stop(now + 0.09);
+      }
+
+      // 2. Low sub thump
+      const sub = this.ctx.createOscillator();
+      const subGain = this.ctx.createGain();
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(95, now);
+      sub.frequency.exponentialRampToValueAtTime(35, now + 0.09);
+
+      subGain.gain.setValueAtTime(0.38, now);
+      subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+      sub.connect(subGain);
+      subGain.connect(this.sfxGain);
+      sub.start(now);
+      sub.stop(now + 0.1);
+    } catch {}
+  }
+
+  // --- SFX: CAR HORN ---
+  public playHorn() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      [440, 554.37].forEach((freq) => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(freq, now);
+
+        gain.gain.setValueAtTime(0.18, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+
+        osc.connect(gain);
+        gain.connect(this.sfxGain!);
+        osc.start(now);
+        osc.stop(now + 0.28);
+      });
+    } catch {}
+  }
+
+  // --- SFX: SPEED TRAP FLASH ---
+  public playSpeedTrapFlash() {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      // High laser confirmation chirp
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(987.77, now); // B5
+      osc.frequency.linearRampToValueAtTime(1975.53, now + 0.12); // B6
+
+      gain.gain.setValueAtTime(0.28, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.22);
+    } catch {}
+  }
+
+  // --- RADIO STATIONS ---
+  public getRadioStation(): RadioStation {
+    return this.currentStation;
+  }
+
+  public setRadioStation(station: RadioStation) {
+    this.currentStation = station;
+    if (this.musicInterval) {
+      clearInterval(this.musicInterval);
+      this.musicInterval = null;
+    }
+    if (station !== 'off' && this.musicEnabled && !this.isMuted) {
+      this.startMusic();
+    }
+  }
+
+  public nextRadioStation(): RadioStation {
+    const stations: RadioStation[] = ['synthwave', 'retroArcade', 'lofi', 'off'];
+    const idx = stations.indexOf(this.currentStation);
+    const next = stations[(idx + 1) % stations.length];
+    this.setRadioStation(next);
+    return next;
+  }
+
   // --- PROCEDURAL SYNTH MUSIC LOOP ---
   public startMusic() {
     this.unlock();
     if (this.musicInterval) return;
+    if (this.currentStation === 'off') return;
 
-    // 130 BPM energetic synthwave bassline & chord progression
+    if (this.currentStation === 'retroArcade') {
+      // 144 BPM Chiptune Fast Arcade Arpeggios
+      const bpm = 144;
+      const stepDuration = (60 / bpm) / 4;
+      const arcadeNotes = [
+        440, 554.37, 659.25, 880,
+        587.33, 739.99, 880, 1174.66,
+        659.25, 830.61, 987.77, 1318.51,
+        554.37, 659.25, 880, 1108.73,
+      ];
+
+      this.musicStep = 0;
+      this.musicInterval = window.setInterval(() => {
+        if (!this.ctx || !this.musicGain || !this.musicEnabled || this.isMuted) return;
+        const note = arcadeNotes[this.musicStep % arcadeNotes.length];
+        const now = this.ctx.currentTime;
+
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(note, now);
+
+        gain.gain.setValueAtTime(0.09, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+        osc.connect(gain);
+        gain.connect(this.musicGain);
+        osc.start(now);
+        osc.stop(now + 0.08);
+
+        this.musicStep++;
+      }, stepDuration * 1000);
+      return;
+    }
+
+    if (this.currentStation === 'lofi') {
+      // 84 BPM Chill Lo-Fi Chords
+      const bpm = 84;
+      const stepDuration = (60 / bpm) / 2; // 8th notes
+      // Warm chords: Dm9 -> G13 -> Cmaj9 -> Am9
+      const lofiChords = [
+        [293.66, 349.23, 440, 523.25], // Dm
+        [196.0, 246.94, 349.23, 440],  // G7
+        [261.63, 329.63, 392, 493.88], // Cmaj7
+        [220.0, 261.63, 329.63, 392],  // Am7
+      ];
+
+      this.musicStep = 0;
+      this.musicInterval = window.setInterval(() => {
+        if (!this.ctx || !this.musicGain || !this.musicEnabled || this.isMuted) return;
+        const chord = lofiChords[Math.floor(this.musicStep / 2) % lofiChords.length];
+        const now = this.ctx.currentTime;
+
+        chord.forEach((freq) => {
+          const osc = this.ctx!.createOscillator();
+          const filter = this.ctx!.createBiquadFilter();
+          const gain = this.ctx!.createGain();
+
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now);
+
+          filter.type = 'lowpass';
+          filter.frequency.setValueAtTime(600, now);
+
+          gain.gain.setValueAtTime(0.06, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + stepDuration * 1.8);
+
+          osc.connect(filter);
+          filter.connect(gain);
+          gain.connect(this.musicGain!);
+
+          osc.start(now);
+          osc.stop(now + stepDuration * 1.8);
+        });
+
+        this.musicStep++;
+      }, stepDuration * 1000);
+      return;
+    }
+
+    // Default: 'synthwave' (128 BPM Energetic Synthwave)
     const bpm = 128;
     const stepDuration = (60 / bpm) / 4; // 16th notes
-    // Chords: Am -> F -> C -> G
     const bassline = [
-      110, 110, 220, 110,  110, 110, 220, 164.81, // A2 octave bounce
-      87.31, 87.31, 174.61, 87.31,  87.31, 87.31, 174.61, 130.81, // F2
-      130.81, 130.81, 261.63, 130.81, 130.81, 130.81, 261.63, 196.0, // C3
-      98.0, 98.0, 196.0, 98.0,  98.0, 98.0, 196.0, 146.83, // G2
+      110, 110, 220, 110,  110, 110, 220, 164.81,
+      87.31, 87.31, 174.61, 87.31,  87.31, 87.31, 174.61, 130.81,
+      130.81, 130.81, 261.63, 130.81, 130.81, 130.81, 261.63, 196.0,
+      98.0, 98.0, 196.0, 98.0,  98.0, 98.0, 196.0, 146.83,
     ];
 
     this.musicStep = 0;
@@ -799,5 +999,6 @@ class SoundManager {
     }
   }
 }
+
 
 export const soundManager = new SoundManager();
