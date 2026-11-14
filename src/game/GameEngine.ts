@@ -14,14 +14,30 @@ import {
   MultiplayerPlayerInfo,
   RemotePlayerTransform,
   OpenWorldHudState,
+  CarStance,
 } from '../types/game';
-import { createPlayerCar, createUsernameTag } from './proceduralModels';
+import { createPlayerCar, createUsernameTag, applyCarStance } from './proceduralModels';
 import { TrackManager } from './trackManager';
 import { ParticleSystem } from './particleSystem';
 import { CarController } from './carController';
 import { OpenWorldManager } from './OpenWorldManager';
-import { ZONE_LABELS, getWorldHeightAt } from './openWorldData';
+import { ZONE_LABELS, getWorldHeightAt, distanceToNearestRoad } from './openWorldData';
+import { DEFAULT_CAR_STANCE } from '../data/cars';
 import { soundManager } from '../audio/soundManager';
+
+interface ReplayFrame {
+  x: number;
+  y: number;
+  z: number;
+  rotY: number;
+  pitch: number;
+  roll: number;
+  steer: number;
+  speed: number;
+}
+
+const REPLAY_CAPACITY = 300; // 10s @ 30Hz
+const REPLAY_INTERVAL = 1 / 30;
 
 const _camTarget = new THREE.Vector3();
 const _idealOffset = new THREE.Vector3();
@@ -61,6 +77,19 @@ export class GameEngine {
   public photoOrbitX = 0;
   public photoOrbitY = 0;
   public crashCamTimer = 0; // seconds of cinematic slow-mo
+
+  // Car Stance & Zero-GC 10-Second Replay Ring Buffer
+  public carStance: CarStance = { ...DEFAULT_CAR_STANCE };
+  public isReplayActive = false;
+  private replayFrames: ReplayFrame[] = [];
+  private replayHead = 0;
+  private replayCount = 0;
+  private replaySampleTimer = 0;
+  private replayPlayTime = 0;
+  private replayDuration = 0;
+  private lastReplayEmitTenths = -1;
+  private lastReplayCamIdx = -1;
+  private replayRestoreState: GameState = 'paused';
 
   // Racing Position / Rank
   public raceRank = 1;
@@ -140,6 +169,7 @@ export class GameEngine {
     posZ?: number;
     heading?: number;
     openWorld?: OpenWorldHudState;
+    health?: number;
     raceRank?: number;
     totalRacers?: number;
     lap?: number;
@@ -155,9 +185,24 @@ export class GameEngine {
       color: string;
     }>;
   }) => void;
+  // Zero-allocation 60fps telemetry stream for imperative DOM/Canvas gauges (no React re-renders)
+  public onFastTelemetry?: (
+    speedKmH: number,
+    nitro: number,
+    gear: number,
+    posX: number,
+    posZ: number,
+    headingDeg: number,
+    isDrifting: boolean
+  ) => void;
   public onFloatingText?: (text: FloatingText) => void;
   public onGameOver?: (reason: string) => void;
   public onAchievementTrigger?: (id: string) => void;
+  public onRecordUpdate?: (type: 'race' | 'drift' | 'ramp', id: string, value: number, secondary?: number) => void;
+  public onReplayProgress?: (currentSec: number, totalSec: number, cameraLabel: string) => void;
+  public onReplayEnded?: (restoreState: GameState) => void;
+  private hudEmitTimer = 0;
+  private lastHudSig = '';
   public onLocalTransform?: (state: {
     x: number;
     y: number;
@@ -256,9 +301,36 @@ export class GameEngine {
     this.openWorldManager.onAchievementTrigger = (id) => {
       this.onAchievementTrigger?.(id);
     };
+    this.openWorldManager.onRepairPulse = (hpDelta, nitroDelta, stationName) => {
+      const justFull = this.carController.healAndRefill(hpDelta, nitroDelta);
+      if (justFull) {
+        soundManager.playRepairComplete();
+        this.particleSystem.emitRepairSparkles(
+          this.carController.x,
+          this.carController.y,
+          this.carController.z,
+          20
+        );
+        this.onFloatingText?.({
+          id: Date.now() + Math.random(),
+          text: `${stationName.toUpperCase()}: 100% HP & NITRO REFILLED`,
+          type: 'powerup',
+          score: 100,
+          timestamp: Date.now(),
+        });
+      }
+    };
+    this.openWorldManager.onRecordEvent = (evt) => {
+      this.onRecordUpdate?.(evt.kind, evt.id, evt.value);
+    };
 
     // 6. Particle System
     this.particleSystem = new ParticleSystem(this.scene);
+
+    // Pre-allocate Zero-GC Replay Ring Buffer
+    for (let i = 0; i < REPLAY_CAPACITY; i++) {
+      this.replayFrames.push({ x: 0, y: 0, z: 0, rotY: 0, pitch: 0, roll: 0, steer: 0, speed: 0 });
+    }
 
     // 7. Player Car
     this.playerCarGroup = createPlayerCar(
@@ -268,6 +340,7 @@ export class GameEngine {
       initialCar.decalType,
       initialCar.stripeColor
     );
+    applyCarStance(this.playerCarGroup, this.carStance);
     this.scene.add(this.playerCarGroup);
     this.attachPlayerUsernameSprite();
 
@@ -279,6 +352,7 @@ export class GameEngine {
       this.trackManager
     );
     this.carController.openWorldManager = this.openWorldManager;
+    this.carController.setStance(this.carStance);
 
     this.bindControllerEvents();
     this.setupResizeListener();
@@ -401,6 +475,40 @@ export class GameEngine {
 
   public cancelStreetRace() {
     this.openWorldManager.cancelStreetRace();
+  }
+
+  public resetCarToRoad() {
+    const isOW = this.gameMode === 'openWorld' || this.gameMode === 'zen';
+    if (isOW) {
+      const nearest = distanceToNearestRoad(this.carController.x, this.carController.z);
+      const roadHeading = Math.atan2(nearest.road.x2 - nearest.road.x1, nearest.road.z2 - nearest.road.z1);
+      const destY = getWorldHeightAt(nearest.cx, nearest.cz, 8.0);
+      this.carController.x = nearest.cx;
+      this.carController.z = nearest.cz;
+      this.carController.y = destY;
+      this.carController.vy = 0;
+      this.carController.isAirborne = false;
+      this.carController.speed = 0;
+      this.carController.headingAngle = roadHeading;
+      this.carController.mesh.position.set(nearest.cx, destY, nearest.cz);
+      this.carController.mesh.rotation.set(0, roadHeading, 0);
+    } else {
+      this.carController.x = 0;
+      this.carController.y = 0;
+      this.carController.vy = 0;
+      this.carController.isAirborne = false;
+      this.carController.speed = Math.min(this.carController.speed, 12);
+      this.carController.headingAngle = 0;
+      this.carController.mesh.position.set(0, 0, this.carController.z);
+      this.carController.mesh.rotation.set(0, 0, 0);
+    }
+    this.onFloatingText?.({
+      id: Date.now(),
+      text: 'CAR RESET TO ROAD',
+      type: 'checkpoint',
+      score: 0,
+      timestamp: Date.now(),
+    });
   }
 
   // --- CAMERA ANGLE VIEW TOGGLES ---
@@ -527,6 +635,12 @@ export class GameEngine {
     this.attachPlayerUsernameSprite();
   }
 
+  public setCarStance(stance: CarStance) {
+    this.carStance = { ...stance };
+    this.carController.setStance(this.carStance);
+    applyCarStance(this.playerCarGroup, this.carStance);
+  }
+
   public changePlayerCar(carStats: CarStats) {
     this.disposeSprite(this.playerUsernameSprite);
     this.playerUsernameSprite = null;
@@ -538,9 +652,11 @@ export class GameEngine {
       carStats.decalType,
       carStats.stripeColor
     );
+    applyCarStance(this.playerCarGroup, this.carStance);
     this.scene.add(this.playerCarGroup);
     this.attachPlayerUsernameSprite();
     this.carController.setCar(this.playerCarGroup, carStats);
+    this.carController.setStance(this.carStance);
   }
 
   public setOnlineRacePhase(phase: 'countdown' | 'racing' | 'finished') {
@@ -690,6 +806,25 @@ export class GameEngine {
     this.carController.onAchievementTrigger = (id) => {
       this.onAchievementTrigger?.(id);
     };
+
+    this.carController.onJumpLanded = (distMeters, airtimeSec, rampId) => {
+      if (distMeters >= 8 || airtimeSec >= 0.7) {
+        this.onFloatingText?.({
+          id: Date.now() + Math.random(),
+          text: `BIG AIR: ${Math.round(distMeters)}m (${airtimeSec.toFixed(1)}s)`,
+          type: 'checkpoint',
+          score: Math.round(distMeters * 8),
+          timestamp: Date.now(),
+        });
+        this.score += Math.round(distMeters * 8);
+      }
+      this.onRecordUpdate?.(
+        'ramp',
+        rampId || 'open-jump',
+        Math.round(distMeters),
+        Number(airtimeSec.toFixed(2))
+      );
+    };
   }
 
   private setupResizeListener() {
@@ -728,6 +863,10 @@ export class GameEngine {
     this.onlineFinishEmitted = false;
     this.onlinePhase = options?.countdownActive ? 'countdown' : 'racing';
     this.lastTransformEmitTime = 0;
+    this.isReplayActive = false;
+    this.replayHead = 0;
+    this.replayCount = 0;
+    this.replaySampleTimer = 0;
 
     const isOW = mode === 'openWorld' || mode === 'zen';
     this.carController.isOpenWorld = isOW;
@@ -789,6 +928,152 @@ export class GameEngine {
     soundManager.startEngine();
   }
 
+  public hasReplayFrames(): boolean {
+    return this.replayCount >= 6;
+  }
+
+  public startReplay(restoreState: GameState = 'paused'): boolean {
+    if (this.replayCount < 6) return false;
+    this.replayRestoreState = restoreState;
+    this.isReplayActive = true;
+    this.gameState = 'playing';
+    this.replayPlayTime = 0;
+    this.replayDuration = (this.replayCount - 1) * REPLAY_INTERVAL;
+    this.lastReplayEmitTenths = -1;
+    this.lastReplayCamIdx = -1;
+    soundManager.stopEngine();
+    return true;
+  }
+
+  public stopReplay(overrideState?: GameState) {
+    if (!this.isReplayActive) return;
+    this.isReplayActive = false;
+    const target = overrideState || this.replayRestoreState;
+    this.gameState = target;
+    this.playerCarGroup.position.set(this.carController.x, this.carController.y, this.carController.z);
+    this.playerCarGroup.rotation.set(0, this.carController.headingAngle, 0);
+    this.camera.fov = 60;
+    this.camera.updateProjectionMatrix();
+    this.onReplayEnded?.(target);
+  }
+
+  private recordReplayFrame(dt: number) {
+    this.replaySampleTimer += dt;
+    if (this.replaySampleTimer < REPLAY_INTERVAL && this.replayCount > 0) return;
+    this.replaySampleTimer = 0;
+    const slot = this.replayFrames[this.replayHead];
+    slot.x = this.carController.x;
+    slot.y = this.carController.y;
+    slot.z = this.carController.z;
+    slot.rotY = this.playerCarGroup.rotation.y;
+    slot.pitch = this.playerCarGroup.rotation.x;
+    slot.roll = this.playerCarGroup.rotation.z;
+    slot.steer = this.carController.steerAngle;
+    slot.speed = this.carController.speed;
+    this.replayHead = (this.replayHead + 1) % REPLAY_CAPACITY;
+    if (this.replayCount < REPLAY_CAPACITY) {
+      this.replayCount++;
+    }
+  }
+
+  private getReplayFrameAt(index: number): ReplayFrame {
+    const oldest = this.replayCount < REPLAY_CAPACITY ? 0 : this.replayHead;
+    const wrapped = (oldest + Math.max(0, Math.min(this.replayCount - 1, index))) % REPLAY_CAPACITY;
+    return this.replayFrames[wrapped];
+  }
+
+  private updateReplayPlayback(dt: number) {
+    this.replayPlayTime += dt;
+    if (this.replayPlayTime >= this.replayDuration) {
+      this.stopReplay();
+      return;
+    }
+
+    const exactIdx = this.replayPlayTime / REPLAY_INTERVAL;
+    const idxA = Math.min(this.replayCount - 2, Math.floor(exactIdx));
+    const idxB = idxA + 1;
+    const alpha = Math.max(0, Math.min(1, exactIdx - idxA));
+
+    const fA = this.getReplayFrameAt(idxA);
+    const fB = this.getReplayFrameAt(idxB);
+
+    const x = fA.x + (fB.x - fA.x) * alpha;
+    const y = fA.y + (fB.y - fA.y) * alpha;
+    const z = fA.z + (fB.z - fA.z) * alpha;
+    // Shortest angle lerp for rotY
+    let dRot = fB.rotY - fA.rotY;
+    while (dRot > Math.PI) dRot -= Math.PI * 2;
+    while (dRot < -Math.PI) dRot += Math.PI * 2;
+    const rotY = fA.rotY + dRot * alpha;
+    const pitch = fA.pitch + (fB.pitch - fA.pitch) * alpha;
+    const roll = fA.roll + (fB.roll - fA.roll) * alpha;
+    const steer = fA.steer + (fB.steer - fA.steer) * alpha;
+    const spd = fA.speed + (fB.speed - fA.speed) * alpha;
+
+    this.playerCarGroup.position.set(x, y, z);
+    this.playerCarGroup.rotation.set(pitch, rotY, roll);
+
+    const ud = (this.playerCarGroup as any).userData;
+    const wheelMounts = ud?.wheelMounts as THREE.Group[] | undefined;
+    const wheels = ud?.wheels as THREE.Group[] | undefined;
+    const spin = (spd * dt) / 0.36;
+    if (wheels) {
+      for (let i = 0; i < wheels.length; i++) wheels[i].rotation.x += spin;
+    }
+    if (wheelMounts && wheelMounts.length >= 2) {
+      wheelMounts[0].rotation.y = steer * 0.85;
+      wheelMounts[1].rotation.y = steer * 0.85;
+    }
+
+    // Cycle 3 cinematic cameras every ~3.3s
+    const camIdx = Math.min(2, Math.floor((this.replayPlayTime / Math.max(0.1, this.replayDuration)) * 3));
+    let camLabel = 'TRACKSIDE LOW CAM';
+    if (camIdx === 0) {
+      camLabel = 'TRACKSIDE LOW CAM';
+      const anchorIdx = Math.min(this.replayCount - 1, Math.floor((camIdx + 0.65) * (this.replayCount / 3)));
+      const anchor = this.getReplayFrameAt(anchorIdx);
+      const sideX = Math.cos(anchor.rotY) * 5.4;
+      const sideZ = -Math.sin(anchor.rotY) * 5.4;
+      this.camera.position.set(
+        anchor.x + Math.sin(anchor.rotY) * 6 + sideX,
+        anchor.y + 1.35,
+        anchor.z + Math.cos(anchor.rotY) * 6 + sideZ
+      );
+      this.camera.fov = 52;
+      _camTarget.set(x, y + 0.75, z);
+    } else if (camIdx === 1) {
+      camLabel = 'HELICOPTER ORBIT';
+      const orbitAng = rotY + 2.3 + this.replayPlayTime * 0.48;
+      this.camera.position.set(
+        x + Math.sin(orbitAng) * 12.5,
+        y + 7.2,
+        z + Math.cos(orbitAng) * 12.5
+      );
+      this.camera.fov = 60;
+      _camTarget.set(x, y + 0.8, z);
+    } else {
+      camLabel = 'WHEEL-WELL CHASE';
+      const backX = -Math.sin(rotY) * 3.8 + Math.cos(rotY) * 2.1;
+      const backZ = -Math.cos(rotY) * 3.8 - Math.sin(rotY) * 2.1;
+      this.camera.position.set(x + backX, y + 0.92, z + backZ);
+      this.camera.fov = 72;
+      _camTarget.set(x + Math.sin(rotY) * 14, y + 0.65, z + Math.cos(rotY) * 14);
+    }
+
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(_camTarget);
+    this.dirLight.position.set(x + 25, 40, z - 15);
+    this.dirLight.target.position.set(x, y, z + 10);
+    this.dirLight.target.updateMatrixWorld();
+
+    const tenths = Math.floor(this.replayPlayTime * 10);
+    if (tenths !== this.lastReplayEmitTenths || camIdx !== this.lastReplayCamIdx) {
+      this.lastReplayEmitTenths = tenths;
+      this.lastReplayCamIdx = camIdx;
+      this.onReplayProgress?.(this.replayPlayTime, this.replayDuration, camLabel);
+    }
+  }
+
   public triggerShake(amount = 0.5) {
     this.cameraShakeIntensity = Math.min(1.2, this.cameraShakeIntensity + amount);
   }
@@ -823,6 +1108,12 @@ export class GameEngine {
     }
 
     if (this.gameState === 'playing') {
+      if (this.isReplayActive) {
+        this.updateReplayPlayback(dt);
+        this.renderer.render(this.scene, this.camera);
+        return;
+      }
+
       // Crash Cam Slow-Motion replay
       let effectiveDt = dt;
       if (this.crashCamTimer > 0) {
@@ -903,16 +1194,19 @@ export class GameEngine {
             remote.mesh.position.z = THREE.MathUtils.damp(remote.mesh.position.z, remote.targetZ, 14, dt);
             remote.mesh.rotation.y = THREE.MathUtils.damp(remote.mesh.rotation.y, remote.targetRotY, 14, dt);
 
-            const wheels = (remote.mesh as any).userData?.wheels as THREE.Group[] | undefined;
+            const ud = (remote.mesh as any).userData;
+            const wheels = ud?.wheels as THREE.Group[] | undefined;
+            const wheelMounts = ud?.wheelMounts as THREE.Group[] | undefined;
             if (wheels) {
               const spin = (remote.speed * dt) / 0.36;
               for (const w of wheels) {
                 w.rotation.x += spin;
               }
-              if (wheels.length >= 2) {
-                wheels[0].rotation.y = THREE.MathUtils.damp(wheels[0].rotation.y, remote.targetSteer * 0.8, 12, dt);
-                wheels[1].rotation.y = THREE.MathUtils.damp(wheels[1].rotation.y, remote.targetSteer * 0.8, 12, dt);
-              }
+            }
+            const steerTargets = wheelMounts && wheelMounts.length >= 2 ? wheelMounts : wheels;
+            if (steerTargets && steerTargets.length >= 2) {
+              steerTargets[0].rotation.y = THREE.MathUtils.damp(steerTargets[0].rotation.y, remote.targetSteer * 0.8, 12, dt);
+              steerTargets[1].rotation.y = THREE.MathUtils.damp(steerTargets[1].rotation.y, remote.targetSteer * 0.8, 12, dt);
             }
           }
         } else {
@@ -949,8 +1243,9 @@ export class GameEngine {
         this.particleSystem.emitRain(carX, carZ, 8);
       }
 
-      // 4. Update Particles
+      // 4. Update Particles & Record Zero-GC Replay Frame
       this.particleSystem.update(effectiveDt);
+      this.recordReplayFrame(effectiveDt);
 
       // 5. Update Game Metrics & Timer
       this.distance += Math.floor(Math.abs(this.carController.speed) * effectiveDt);
@@ -1063,41 +1358,62 @@ export class GameEngine {
       // Heat level calculation (1 to 5 stars)
       const heatLevel = isPolice ? Math.min(5, 1 + Math.floor(this.policeSurvivalTimer / 12)) : undefined;
 
-      // Notify React HUD
+      // Zero-re-render 60fps imperative telemetry stream (Speedometer, Gear, Nitro Arc, Minimap)
+      const headingDeg = (((this.carController.headingAngle * 180) / Math.PI) % 360 + 360) % 360;
+      this.onFastTelemetry?.(
+        speedKmH,
+        Math.round(this.carController.nitroAmount),
+        this.carController.currentGear,
+        carX,
+        carZ,
+        headingDeg,
+        this.carController.isDrifting
+      );
+
+      // Throttled React HUD sync (~5Hz or immediately when discrete state changes)
       const openWorldData = isOW ? this.openWorldManager.getHudState(carX, carZ) : undefined;
-      this.onScoreUpdate?.({
-        score: this.score,
-        speed: speedKmH,
-        nitro: Math.round(this.carController.nitroAmount),
-        distance: this.distance,
-        coins: this.coins,
-        timeLeft: Math.max(0, Math.ceil(this.timeLeft)),
-        isDrifting: this.carController.isDrifting,
-        shield: this.carController.hasShield,
-        magnetTimeLeft: Math.ceil(this.carController.magnetTimer),
-        currentGear: this.carController.currentGear,
-        transmission: this.carController.transmission,
-        clutch: this.carController.clutchEngaged,
-        cameraView: this.cameraView,
-        weather: this.weather,
-        headlights: this.carController.headlightsActive,
-        indicators: this.carController.indicatorState,
-        doorsOpen: this.carController.doorsOpen,
-        trunkOpen: this.carController.trunkOpen,
-        heatLevel,
-        raceRank: openWorldData?.activeRace ? openWorldData.activeRace.rank : this.raceRank,
-        totalRacers: openWorldData?.activeRace ? openWorldData.activeRace.totalRacers : totalRacersCount,
-        lap: isOnline ? this.onlineLap : undefined,
-        totalLaps: isOnline ? this.onlineTotalLaps : undefined,
-        leaderboard: onlineLeaderboard,
-        zoneName: isOW ? ZONE_LABELS[this.openWorldManager.currentZone] : undefined,
-        trophiesFound: isOW ? this.openWorldManager.tokensCollected : undefined,
-        totalTrophies: isOW ? this.openWorldManager.totalTokens : undefined,
-        posX: Math.round(carX),
-        posZ: Math.round(carZ),
-        heading: Math.round((((this.carController.headingAngle * 180) / Math.PI) % 360 + 360) % 360),
-        openWorld: openWorldData,
-      });
+      const discreteTime = Math.max(0, Math.ceil(this.timeLeft));
+      const discreteHealth = Math.round(this.carController.health);
+      const hudSig = `${this.carController.currentGear}|${this.carController.hasShield}|${this.carController.headlightsActive}|${this.carController.indicatorState}|${this.carController.doorsOpen}|${this.carController.trunkOpen}|${this.carController.isDrifting}|${this.coins}|${discreteTime}|${discreteHealth}|${this.raceRank}|${this.onlineLap}|${openWorldData?.currentZone || ''}|${openWorldData?.activeRace?.checkpointIdx ?? -1}|${openWorldData?.activeDriftZone?.name || ''}|${openWorldData?.waypoint?.label || ''}`;
+      this.hudEmitTimer += dt;
+      if (this.hudEmitTimer >= 0.2 || hudSig !== this.lastHudSig) {
+        this.hudEmitTimer = 0;
+        this.lastHudSig = hudSig;
+        this.onScoreUpdate?.({
+          score: this.score,
+          speed: speedKmH,
+          nitro: Math.round(this.carController.nitroAmount),
+          distance: this.distance,
+          coins: this.coins,
+          timeLeft: discreteTime,
+          isDrifting: this.carController.isDrifting,
+          shield: this.carController.hasShield,
+          magnetTimeLeft: Math.ceil(this.carController.magnetTimer),
+          currentGear: this.carController.currentGear,
+          transmission: this.carController.transmission,
+          clutch: this.carController.clutchEngaged,
+          cameraView: this.cameraView,
+          weather: this.weather,
+          headlights: this.carController.headlightsActive,
+          indicators: this.carController.indicatorState,
+          doorsOpen: this.carController.doorsOpen,
+          trunkOpen: this.carController.trunkOpen,
+          heatLevel,
+          health: discreteHealth,
+          raceRank: openWorldData?.activeRace ? openWorldData.activeRace.rank : this.raceRank,
+          totalRacers: openWorldData?.activeRace ? openWorldData.activeRace.totalRacers : totalRacersCount,
+          lap: isOnline ? this.onlineLap : undefined,
+          totalLaps: isOnline ? this.onlineTotalLaps : undefined,
+          leaderboard: onlineLeaderboard,
+          zoneName: isOW ? ZONE_LABELS[this.openWorldManager.currentZone] : undefined,
+          trophiesFound: isOW ? this.openWorldManager.tokensCollected : undefined,
+          totalTrophies: isOW ? this.openWorldManager.totalTokens : undefined,
+          posX: Math.round(carX),
+          posZ: Math.round(carZ),
+          heading: Math.round(headingDeg),
+          openWorld: openWorldData,
+        });
+      }
 
 
       // 6. Dynamic Camera Follow with 3 Camera Modes

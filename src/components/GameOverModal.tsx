@@ -1,5 +1,5 @@
 import React from 'react';
-import { RotateCcw, Home, Trophy, Flame, Coins, Navigation, Users, Crown } from 'lucide-react';
+import { RotateCcw, Home, Trophy, Flame, Coins, Navigation, Users, Crown, Film } from 'lucide-react';
 
 export interface OnlineStandingResult {
   id: string;
@@ -24,6 +24,8 @@ interface GameOverModalProps {
   onlineResults?: OnlineStandingResult[];
   isHost?: boolean;
   onBackToLobby?: () => void;
+  canReplay?: boolean;
+  onWatchReplay?: () => void;
 }
 
 export const GameOverModal: React.FC<GameOverModalProps> = ({
@@ -39,6 +41,8 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   onlineResults,
   isHost,
   onBackToLobby,
+  canReplay = false,
+  onWatchReplay,
 }) => {
   const isOnline = gameMode === 'online';
   const localRank = onlineResults?.find((r) => r.isLocal)?.rank;
@@ -208,6 +212,16 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
                   SPACE
                 </span>
               </button>
+
+              {canReplay && onWatchReplay && (
+                <button
+                  onClick={onWatchReplay}
+                  className="w-full sm:w-auto px-4 py-3.5 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-cyan-300 font-bold text-sm tracking-wider rounded-xl transition-colors flex items-center justify-center gap-2 font-['Chakra_Petch',sans-serif] cursor-pointer"
+                >
+                  <Film className="w-4 h-4" />
+                  <span>REPLAY</span>
+                </button>
+              )}
 
               <button
                 onClick={onHome}

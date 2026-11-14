@@ -1,6 +1,7 @@
 import {
   OpenWorldActivity,
   OpenWorldHub,
+  OpenWorldRepairStation,
   OpenWorldRoadSegment,
   WorldZone,
 } from '../types/game';
@@ -89,6 +90,53 @@ export const OPEN_WORLD_HUBS: OpenWorldHub[] = [
   { id: 'hub-industrial', name: 'Stunt Airport Hangar', zone: 'industrial', x: -380, z: 240, heading: 0, color: '#a855f7', discovered: false },
 ];
 
+// Glowing Repair & Nitro Service Stations across all 4 zones
+export const OPEN_WORLD_REPAIR_STATIONS: OpenWorldRepairStation[] = [
+  { id: 'rep-city', name: 'Cyber Metro Pit Bay', zone: 'city', x: -280, z: -90 },
+  { id: 'rep-beach', name: 'Coastal Auto Care', zone: 'beach', x: 150, z: 240 },
+  { id: 'rep-mountains', name: 'Canyon Base Service', zone: 'mountains', x: 180, z: 45 },
+  { id: 'rep-industrial', name: 'Airport Stunt Repair', zone: 'industrial', x: -380, z: 300 },
+];
+
+// Ground-level Downtown Intersection Traffic Light Coordinates
+export const OPEN_WORLD_TRAFFIC_LIGHTS: Array<{ id: string; x: number; z: number }> = [
+  { id: 'tl-metro-south', x: -280, z: -20 },
+  { id: 'tl-east-mid', x: -120, z: -180 },
+  { id: 'tl-east-north', x: -120, z: -320 },
+  { id: 'tl-west-north', x: -480, z: -320 },
+];
+
+// Stunt Arena Definitions (Industrial & Airport Zone)
+export const STUNT_LOOP_DEF = {
+  id: 'stunt-loop-airport',
+  name: 'Mega Turbine Loop',
+  x: -380,
+  z: 360,
+  radius: 13.5,
+  width: 10.5,
+};
+
+export const STUNT_HALFPIPE_DEF = {
+  id: 'stunt-halfpipe-arena',
+  name: 'Airport Half-Pipe Bowl',
+  x: -180,
+  z: 525,
+  halfWidth: 16,
+  halfLength: 18,
+  height: 6.2,
+};
+
+export const CONTAINER_JUMP_DECKS: Array<{
+  x: number;
+  zMin: number;
+  zMax: number;
+  halfWidth: number;
+  elevation: number;
+}> = [
+  { x: -510, zMin: 318, zMax: 356, halfWidth: 4.5, elevation: 3.3 },
+  { x: -510, zMin: 376, zMax: 416, halfWidth: 4.5, elevation: 3.3 },
+];
+
 export interface OpenWorldRampDef {
   id: string;
   name: string;
@@ -105,9 +153,15 @@ export const OPEN_WORLD_RAMPS: OpenWorldRampDef[] = [
   { id: 'ramp-pier', name: 'Ocean Pier Stunt Leap', x: 240, z: 592, width: 14, length: 18, height: 4.5, rotY: 0, baseY: 2.7 },
   { id: 'ramp-summit', name: 'Eagle Peak Overlook Launch', x: 460, z: -560, width: 16, length: 20, height: 5.2, rotY: -1.15, baseY: 13.5 },
   { id: 'ramp-airport-1', name: 'Runway Mega-Ramp South', x: -380, z: 615, width: 20, length: 22, height: 6.2, rotY: 0, baseY: 0 },
-  { id: 'ramp-airport-2', name: 'Runway Twin Kicker', x: -380, z: 420, width: 14, length: 16, height: 4.0, rotY: Math.PI, baseY: 0 },
+  { id: 'ramp-airport-2', name: 'Runway Twin Kicker', x: -380, z: 425, width: 14, length: 16, height: 4.0, rotY: Math.PI, baseY: 0 },
   { id: 'ramp-cross', name: 'Expressway Sky Bridge', x: 0, z: 290, width: 13, length: 16, height: 3.8, rotY: 0, baseY: 0 },
+  { id: 'ramp-container-entry', name: 'Container Track Entry', x: -510, z: 310, width: 9, length: 14, height: 3.3, rotY: 0, baseY: 0 },
+  { id: 'ramp-container-exit', name: 'Container Sky Launch', x: -510, z: 424, width: 9, length: 14, height: 4.2, rotY: 0, baseY: 3.3 },
 ];
+
+export function isInsideTunnel(px: number, py: number, pz: number): boolean {
+  return Math.abs(px + 280) < 11.5 && pz >= -420 && pz <= -250 && py < 6.4;
+}
 
 export function createInitialActivities(): OpenWorldActivity[] {
   return [
@@ -254,12 +308,13 @@ export function createInitialActivities(): OpenWorldActivity[] {
     { id: 'speed-bridge', name: 'Canyon Bridge Speed Gate', type: 'speedtrap', zone: 'mountains', x: 345, z: -300, radius: 14, rewardCoins: 85, rewardScore: 1100, completed: false },
     { id: 'speed-runway', name: 'Airport Runway Trap', type: 'speedtrap', zone: 'industrial', x: -380, z: 495, radius: 16, rewardCoins: 80, rewardScore: 1000, completed: false },
 
-    // 5 JUMP RAMPS
+    // 6 JUMP RAMPS & STUNT TRACK
     { id: 'ramp-pier', name: 'Ocean Pier Stunt Leap', type: 'ramp', zone: 'beach', x: 240, z: 592, radius: 12, rewardCoins: 90, rewardScore: 1400, completed: false },
     { id: 'ramp-summit', name: 'Eagle Peak Overlook Launch', type: 'ramp', zone: 'mountains', x: 460, z: -560, radius: 13, rewardCoins: 120, rewardScore: 1800, completed: false },
     { id: 'ramp-airport-1', name: 'Runway Mega-Ramp', type: 'ramp', zone: 'industrial', x: -380, z: 615, radius: 14, rewardCoins: 110, rewardScore: 1600, completed: false },
-    { id: 'ramp-airport-2', name: 'Runway Twin Kicker', type: 'ramp', zone: 'industrial', x: -380, z: 420, radius: 11, rewardCoins: 85, rewardScore: 1200, completed: false },
+    { id: 'ramp-airport-2', name: 'Runway Twin Kicker', type: 'ramp', zone: 'industrial', x: -380, z: 425, radius: 11, rewardCoins: 85, rewardScore: 1200, completed: false },
     { id: 'ramp-cross', name: 'Expressway Sky Bridge', type: 'ramp', zone: 'beach', x: 0, z: 290, radius: 11, rewardCoins: 80, rewardScore: 1100, completed: false },
+    { id: 'ramp-container-exit', name: 'Container Sky Launch', type: 'ramp', zone: 'industrial', x: -510, z: 424, radius: 11, rewardCoins: 115, rewardScore: 1500, completed: false },
 
     // 12 HIDDEN COLLECTIBLE TOKENS & MYSTERY CRATES
     { id: 'tok-alley-1', name: 'Cyber Alley Golden Token', type: 'token', zone: 'city', x: -380, z: -100, radius: 4.5, rewardCoins: 75, rewardScore: 500, completed: false },
@@ -272,7 +327,7 @@ export function createInitialActivities(): OpenWorldActivity[] {
     { id: 'tok-canyon-gorge', name: 'Canyon Bridge Crate', type: 'crate', zone: 'mountains', x: 345, z: -300, radius: 4.5, rewardCoins: 125, rewardScore: 800, completed: false },
     { id: 'tok-summit', name: 'Eagle Peak Crown Token', type: 'token', zone: 'mountains', x: 410, z: -535, radius: 4.5, rewardCoins: 150, rewardScore: 1000, completed: false },
     { id: 'tok-mtn-pass', name: 'Alpine Trail Token', type: 'token', zone: 'mountains', x: 535, z: 10, radius: 4.5, rewardCoins: 90, rewardScore: 600, completed: false },
-    { id: 'tok-containers', name: 'Container Maze Crate', type: 'crate', zone: 'industrial', x: -470, z: 360, radius: 4.5, rewardCoins: 120, rewardScore: 750, completed: false },
+    { id: 'tok-containers', name: 'Container Jump Deck Crate', type: 'crate', zone: 'industrial', x: -510, z: 396, radius: 4.5, rewardCoins: 120, rewardScore: 750, completed: false },
     { id: 'tok-hangar', name: 'Runway Hangar Token', type: 'token', zone: 'industrial', x: -560, z: 420, radius: 4.5, rewardCoins: 95, rewardScore: 600, completed: false },
   ];
 }
@@ -330,8 +385,7 @@ export function distanceToNearestRoad(px: number, pz: number): {
 
 /**
  * Zero-allocation surface elevation query for Open-World roads, mountain switchbacks,
- * wooden pier, elevated cyber overpass, and ramp wedges.
- * `currentY` disambiguates overlapping overpass vs underpass tunnel/avenue at (-280, -180).
+ * wooden pier, elevated cyber overpass, stunt half-pipe, elevated container decks, and ramp wedges.
  */
 export function getWorldHeightAt(px: number, pz: number, currentY = 0): number {
   let bestY = 0;
@@ -345,7 +399,6 @@ export function getWorldHeightAt(px: number, pz: number, currentY = 0): number {
 
     // Disambiguate cyber overpass vs street underneath at X = -280
     if (r.kind === 'overpass' && r.zone === 'city' && currentY < 1.2) {
-      // Only snap onto overpass deck if driving up the ramp ends, or already elevated
       if (px > -365 && px < -195) {
         continue;
       }
@@ -362,6 +415,7 @@ export function getWorldHeightAt(px: number, pz: number, currentY = 0): number {
   // 2. Check ramps for smooth uphill launch height
   for (let i = 0; i < OPEN_WORLD_RAMPS.length; i++) {
     const ramp = OPEN_WORLD_RAMPS[i];
+    if (ramp.baseY > currentY + 1.5) continue;
     const dx = px - ramp.x;
     const dz = pz - ramp.z;
     const cos = Math.cos(-ramp.rotY);
@@ -371,11 +425,39 @@ export function getWorldHeightAt(px: number, pz: number, currentY = 0): number {
     const halfW = ramp.width * 0.55;
     const halfL = ramp.length * 0.5;
     if (Math.abs(localX) <= halfW && Math.abs(localZ) <= halfL) {
-      const progress = (localZ + halfL) / ramp.length; // 0 at base, 1 at lip
+      const progress = (localZ + halfL) / ramp.length;
       const rampY = ramp.baseY + progress * ramp.height;
       if (rampY > bestY) bestY = rampY;
     }
   }
 
+  // 3. Elevated Container Jump Track Decks
+  for (let i = 0; i < CONTAINER_JUMP_DECKS.length; i++) {
+    const d = CONTAINER_JUMP_DECKS[i];
+    if (
+      currentY >= d.elevation - 1.2 &&
+      Math.abs(px - d.x) <= d.halfWidth &&
+      pz >= d.zMin &&
+      pz <= d.zMax
+    ) {
+      if (d.elevation > bestY) bestY = d.elevation;
+    }
+  }
+
+  // 4. Stunt Airport Half-Pipe Curved Skate Bowl
+  const hpDx = Math.abs(px - STUNT_HALFPIPE_DEF.x);
+  const hpDz = Math.abs(pz - STUNT_HALFPIPE_DEF.z);
+  if (hpDx <= STUNT_HALFPIPE_DEF.halfWidth && hpDz <= STUNT_HALFPIPE_DEF.halfLength) {
+    // Flat floor in middle 6m, parabolic rise on East/West walls
+    const edgeStart = 6.0;
+    if (hpDx > edgeStart) {
+      const wallSpan = STUNT_HALFPIPE_DEF.halfWidth - edgeStart;
+      const t = Math.min(1, (hpDx - edgeStart) / wallSpan);
+      const hpY = t * t * STUNT_HALFPIPE_DEF.height;
+      if (hpY > bestY) bestY = hpY;
+    }
+  }
+
   return bestY;
 }
+

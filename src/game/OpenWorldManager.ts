@@ -19,9 +19,14 @@ import {
   createTrafficVehicle,
 } from './proceduralModels';
 import {
+  CONTAINER_JUMP_DECKS,
   OPEN_WORLD_HUBS,
   OPEN_WORLD_RAMPS,
+  OPEN_WORLD_REPAIR_STATIONS,
   OPEN_WORLD_ROADS,
+  OPEN_WORLD_TRAFFIC_LIGHTS,
+  STUNT_HALFPIPE_DEF,
+  STUNT_LOOP_DEF,
   WORLD_HALF_EXTENT,
   ZONE_LABELS,
   createInitialActivities,
@@ -106,6 +111,11 @@ export class OpenWorldManager {
   private roadMat!: THREE.MeshStandardMaterial;
   private lampGlowMat!: THREE.MeshStandardMaterial;
   private neonTrimMat!: THREE.MeshStandardMaterial;
+  private trafficNsLampMesh?: THREE.InstancedMesh;
+  private trafficEwLampMesh?: THREE.InstancedMesh;
+  private trafficLightCycle = 0;
+  private repairBayRingMeshes: THREE.Mesh[] = [];
+  private repairCooldownUntil = 0;
 
   // Callbacks
   public onZoneChange?: (zone: WorldZone, zoneName: string) => void;
@@ -116,6 +126,12 @@ export class OpenWorldManager {
     kind: 'race' | 'drift' | 'speedtrap' | 'ramp' | 'token' | 'hub';
   }) => void;
   public onAchievementTrigger?: (id: string) => void;
+  public onRepairPulse?: (hpGain: number, nitroGain: number, stationName: string) => void;
+  public onRecordEvent?: (payload: {
+    kind: 'race' | 'drift';
+    id: string;
+    value: number;
+  }) => void;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -134,7 +150,10 @@ export class OpenWorldManager {
     this.buildCoastalProps();
     this.buildMountainProps();
     this.buildIndustrialProps();
+    this.buildStuntArenaAndBridges();
     this.buildStreetLightsAndBarriers();
+    this.buildTrafficLights();
+    this.buildRepairStations();
     this.buildActivityMeshes();
     this.buildGpsGuidance();
     this.initVehiclePools();
@@ -351,13 +370,42 @@ export class OpenWorldManager {
     tWallR.position.set(-271.5, 3.4, -335);
     this.rootGroup.add(tWallL, tWallR);
 
-    // Glowing Cyber Neon Strips inside tunnel
+    // Glowing Cyber Neon Strips & Instanced Overhead LED Fixtures inside tunnel
     const tNeonMat = new THREE.MeshBasicMaterial({ color: 0x06b6d4 });
     const tNeonL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, 158), tNeonMat);
     tNeonL.position.set(-287.8, 5.4, -335);
     const tNeonR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, 158), tNeonMat);
     tNeonR.position.set(-272.2, 5.4, -335);
     this.rootGroup.add(tNeonL, tNeonR);
+
+    const tunnelLedGeo = new THREE.BoxGeometry(7.2, 0.18, 1.4);
+    const tunnelLedMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+    const tunnelLeds = new THREE.InstancedMesh(tunnelLedGeo, tunnelLedMat, 12);
+    for (let i = 0; i < 12; i++) {
+      _dummy.position.set(-280, 6.25, -408 + i * 13);
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      tunnelLeds.setMatrixAt(i, _dummy.matrix);
+    }
+    tunnelLeds.instanceMatrix.needsUpdate = true;
+    tunnelLeds.computeBoundingSphere();
+    this.rootGroup.add(tunnelLeds);
+
+    // Glowing Tunnel Entrance & Exit Portals
+    const portalMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
+    const portalGeo = new THREE.BoxGeometry(17.5, 0.65, 0.8);
+    const portalMesh = new THREE.InstancedMesh(portalGeo, portalMat, 2);
+    [-415, -255].forEach((pz, idx) => {
+      _dummy.position.set(-280, 7.0, pz);
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      portalMesh.setMatrixAt(idx, _dummy.matrix);
+    });
+    portalMesh.instanceMatrix.needsUpdate = true;
+    portalMesh.computeBoundingSphere();
+    this.rootGroup.add(portalMesh);
 
     // Overpass Support Pillars (under Cyber Overpass and Canyon Bridge)
     const pillarGeo = new THREE.CylinderGeometry(0.9, 1.1, 1, 6);
@@ -737,6 +785,168 @@ export class OpenWorldManager {
     this.rootGroup.add(driftArena);
   }
 
+  // 6b. Living Stunt Arena (Loop-the-Loop, Half-Pipe Bowl, Container Jump Track) & Highway Arch Bridges (100% InstancedMesh)
+  private buildStuntArenaAndBridges() {
+    // A. Mega Turbine Loop-the-Loop (24 instanced asphalt planks + purple neon rails)
+    const loopSegments = 24;
+    const plankGeo = new THREE.BoxGeometry(STUNT_LOOP_DEF.width, 0.65, 3.85);
+    const plankMat = new THREE.MeshStandardMaterial({
+      color: 0x18181b,
+      roughness: 0.55,
+      metalness: 0.25,
+      flatShading: true,
+    });
+    const neonRailGeo = new THREE.BoxGeometry(0.32, 0.9, 3.85);
+    const neonRailMat = new THREE.MeshBasicMaterial({ color: 0xa855f7 });
+
+    const loopPlanks = new THREE.InstancedMesh(plankGeo, plankMat, loopSegments);
+    const loopRails = new THREE.InstancedMesh(neonRailGeo, neonRailMat, loopSegments * 2);
+
+    for (let i = 0; i < loopSegments; i++) {
+      const ang = (i / loopSegments) * Math.PI * 2;
+      const ly = STUNT_LOOP_DEF.radius - Math.cos(ang) * STUNT_LOOP_DEF.radius + 0.25;
+      const lz = STUNT_LOOP_DEF.z + Math.sin(ang) * STUNT_LOOP_DEF.radius;
+      const lx = STUNT_LOOP_DEF.x + (i / loopSegments - 0.5) * 3.2; // slight lateral helix offset so entry doesn't clip exit
+
+      _dummy.position.set(lx, ly, lz);
+      _dummy.rotation.set(-ang, 0, 0);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      loopPlanks.setMatrixAt(i, _dummy.matrix);
+
+      // Left & Right neon guardrails
+      _dummy.position.set(lx - STUNT_LOOP_DEF.width * 0.48, ly, lz);
+      _dummy.updateMatrix();
+      loopRails.setMatrixAt(i * 2, _dummy.matrix);
+
+      _dummy.position.set(lx + STUNT_LOOP_DEF.width * 0.48, ly, lz);
+      _dummy.updateMatrix();
+      loopRails.setMatrixAt(i * 2 + 1, _dummy.matrix);
+    }
+    loopPlanks.instanceMatrix.needsUpdate = true;
+    loopPlanks.computeBoundingSphere();
+    loopRails.instanceMatrix.needsUpdate = true;
+    loopRails.computeBoundingSphere();
+    this.rootGroup.add(loopPlanks, loopRails);
+
+    // B. Airport Half-Pipe Skate Bowl (Instanced Curved Planks on East & West flanks)
+    const hpSteps = 6;
+    const hpWallCount = hpSteps * 2;
+    const hpPlankGeo = new THREE.BoxGeometry(2.1, 0.35, STUNT_HALFPIPE_DEF.halfLength * 2);
+    const hpMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45, metalness: 0.4 });
+    const hpMesh = new THREE.InstancedMesh(hpPlankGeo, hpMat, hpWallCount);
+    const edgeStart = 6.0;
+    const wallSpan = STUNT_HALFPIPE_DEF.halfWidth - edgeStart;
+
+    let hpIdx = 0;
+    for (let s = 0; s < hpSteps; s++) {
+      const t0 = s / hpSteps;
+      const t1 = (s + 1) / hpSteps;
+      const tMid = (t0 + t1) * 0.5;
+      const yMid = tMid * tMid * STUNT_HALFPIPE_DEF.height;
+      const xOffset = edgeStart + tMid * wallSpan;
+      const slope = Math.atan2((t1 * t1 - t0 * t0) * STUNT_HALFPIPE_DEF.height, wallSpan / hpSteps);
+
+      // West bank
+      _dummy.position.set(STUNT_HALFPIPE_DEF.x - xOffset, yMid, STUNT_HALFPIPE_DEF.z);
+      _dummy.rotation.set(0, 0, -slope);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      hpMesh.setMatrixAt(hpIdx++, _dummy.matrix);
+
+      // East bank
+      _dummy.position.set(STUNT_HALFPIPE_DEF.x + xOffset, yMid, STUNT_HALFPIPE_DEF.z);
+      _dummy.rotation.set(0, 0, slope);
+      _dummy.updateMatrix();
+      hpMesh.setMatrixAt(hpIdx++, _dummy.matrix);
+    }
+    hpMesh.instanceMatrix.needsUpdate = true;
+    hpMesh.computeBoundingSphere();
+    this.rootGroup.add(hpMesh);
+
+    // Half-Pipe Top Neon Coping Bars
+    const copingGeo = new THREE.BoxGeometry(0.45, 0.45, STUNT_HALFPIPE_DEF.halfLength * 2);
+    const copingMesh = new THREE.InstancedMesh(copingGeo, new THREE.MeshBasicMaterial({ color: 0x22d3ee }), 2);
+    [-1, 1].forEach((side, idx) => {
+      _dummy.position.set(
+        STUNT_HALFPIPE_DEF.x + side * STUNT_HALFPIPE_DEF.halfWidth,
+        STUNT_HALFPIPE_DEF.height + 0.1,
+        STUNT_HALFPIPE_DEF.z
+      );
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      copingMesh.setMatrixAt(idx, _dummy.matrix);
+    });
+    copingMesh.instanceMatrix.needsUpdate = true;
+    copingMesh.computeBoundingSphere();
+    this.rootGroup.add(copingMesh);
+
+    // C. Elevated Container Jump Track Decks
+    const deckMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.65, flatShading: true });
+    const deckGeo = new THREE.BoxGeometry(1, 3.3, 1);
+    const decksMesh = new THREE.InstancedMesh(deckGeo, deckMat, CONTAINER_JUMP_DECKS.length);
+    for (let i = 0; i < CONTAINER_JUMP_DECKS.length; i++) {
+      const d = CONTAINER_JUMP_DECKS[i];
+      const len = d.zMax - d.zMin;
+      _dummy.position.set(d.x, d.elevation * 0.5, (d.zMin + d.zMax) * 0.5);
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.scale.set(d.halfWidth * 2, 1, len);
+      _dummy.updateMatrix();
+      decksMesh.setMatrixAt(i, _dummy.matrix);
+    }
+    decksMesh.instanceMatrix.needsUpdate = true;
+    decksMesh.computeBoundingSphere();
+    this.rootGroup.add(decksMesh);
+
+    // D. Overhead Highway Arch Bridges (Central Spine (0, 60) & Airport Boulevard (-380, 195))
+    const bridgeSpecs = [
+      { x: 0, z: 55, rotY: 0, span: 20, height: 10.5, col: 0x38bdf8 },
+      { x: 0, z: 215, rotY: 0, span: 20, height: 10.5, col: 0xf59e0b },
+      { x: -380, z: 190, rotY: 0, span: 28, height: 11.5, col: 0xa855f7 },
+    ];
+    const bPillarGeo = new THREE.BoxGeometry(1.4, 1, 1.4);
+    const bSpanGeo = new THREE.BoxGeometry(1, 1.6, 2.2);
+    const bMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.45, metalness: 0.65 });
+    const bNeonMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+    const bPillars = new THREE.InstancedMesh(bPillarGeo, bMat, bridgeSpecs.length * 2);
+    const bSpans = new THREE.InstancedMesh(bSpanGeo, bMat, bridgeSpecs.length);
+    const bStrips = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.35, 2.35), bNeonMat, bridgeSpecs.length);
+
+    bridgeSpecs.forEach((b, i) => {
+      _dummy.position.set(b.x - b.span * 0.5, b.height * 0.5, b.z);
+      _dummy.rotation.set(0, b.rotY, 0);
+      _dummy.scale.set(1, b.height, 1);
+      _dummy.updateMatrix();
+      bPillars.setMatrixAt(i * 2, _dummy.matrix);
+
+      _dummy.position.set(b.x + b.span * 0.5, b.height * 0.5, b.z);
+      _dummy.updateMatrix();
+      bPillars.setMatrixAt(i * 2 + 1, _dummy.matrix);
+
+      _dummy.position.set(b.x, b.height, b.z);
+      _dummy.scale.set(b.span + 2.2, 1, 1);
+      _dummy.updateMatrix();
+      bSpans.setMatrixAt(i, _dummy.matrix);
+
+      _dummy.position.set(b.x, b.height + 0.9, b.z);
+      _dummy.scale.set(b.span + 1.8, 1, 1);
+      _dummy.updateMatrix();
+      bStrips.setMatrixAt(i, _dummy.matrix);
+      _color.setHex(b.col);
+      bStrips.setColorAt(i, _color);
+    });
+    bPillars.instanceMatrix.needsUpdate = true;
+    bSpans.instanceMatrix.needsUpdate = true;
+    bStrips.instanceMatrix.needsUpdate = true;
+    if (bStrips.instanceColor) bStrips.instanceColor.needsUpdate = true;
+    bPillars.computeBoundingSphere();
+    bSpans.computeBoundingSphere();
+    bStrips.computeBoundingSphere();
+    this.rootGroup.add(bPillars, bSpans, bStrips);
+  }
+
   // 7. Instanced Streetlights & Guardrails along Highways
   private buildStreetLightsAndBarriers() {
     const poleGeo = new THREE.CylinderGeometry(0.14, 0.18, 6.5, 6);
@@ -794,6 +1004,127 @@ export class OpenWorldManager {
       glows.computeBoundingSphere();
       this.rootGroup.add(poles, glows);
     }
+  }
+
+  // 7b. Functioning Downtown Intersection Traffic Lights (InstancedMesh Red/Yellow/Green Cycle)
+  private buildTrafficLights() {
+    const count = OPEN_WORLD_TRAFFIC_LIGHTS.length;
+    if (count === 0) return;
+
+    const mastGeo = new THREE.CylinderGeometry(0.18, 0.24, 6.2, 6);
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.4 });
+    const armGeo = new THREE.BoxGeometry(7.2, 0.24, 0.24);
+    const housingGeo = new THREE.BoxGeometry(1.1, 0.55, 0.55);
+    const lampGeo = new THREE.BoxGeometry(0.45, 0.45, 0.65);
+    const lampMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+    const masts = new THREE.InstancedMesh(mastGeo, mastMat, count);
+    const arms = new THREE.InstancedMesh(armGeo, mastMat, count);
+    const housings = new THREE.InstancedMesh(housingGeo, mastMat, count * 2);
+    this.trafficNsLampMesh = new THREE.InstancedMesh(lampGeo, lampMat, count);
+    this.trafficEwLampMesh = new THREE.InstancedMesh(lampGeo, lampMat, count);
+
+    for (let i = 0; i < count; i++) {
+      const tl = OPEN_WORLD_TRAFFIC_LIGHTS[i];
+      _dummy.position.set(tl.x + 8.5, 3.1, tl.z + 8.5);
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      masts.setMatrixAt(i, _dummy.matrix);
+
+      _dummy.position.set(tl.x + 4.8, 6.1, tl.z + 8.5);
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.updateMatrix();
+      arms.setMatrixAt(i, _dummy.matrix);
+
+      // North-South facing signal housing & lamp
+      _dummy.position.set(tl.x + 2.4, 5.75, tl.z + 8.5);
+      _dummy.updateMatrix();
+      housings.setMatrixAt(i * 2, _dummy.matrix);
+      this.trafficNsLampMesh.setMatrixAt(i, _dummy.matrix);
+      _color.setHex(0x22c55e);
+      this.trafficNsLampMesh.setColorAt(i, _color);
+
+      // East-West facing signal housing & lamp
+      _dummy.position.set(tl.x + 5.8, 5.75, tl.z + 8.5);
+      _dummy.rotation.set(0, Math.PI * 0.5, 0);
+      _dummy.updateMatrix();
+      housings.setMatrixAt(i * 2 + 1, _dummy.matrix);
+      this.trafficEwLampMesh.setMatrixAt(i, _dummy.matrix);
+      _color.setHex(0xef4444);
+      this.trafficEwLampMesh.setColorAt(i, _color);
+    }
+
+    masts.instanceMatrix.needsUpdate = true;
+    arms.instanceMatrix.needsUpdate = true;
+    housings.instanceMatrix.needsUpdate = true;
+    this.trafficNsLampMesh.instanceMatrix.needsUpdate = true;
+    this.trafficEwLampMesh.instanceMatrix.needsUpdate = true;
+    if (this.trafficNsLampMesh.instanceColor) this.trafficNsLampMesh.instanceColor.needsUpdate = true;
+    if (this.trafficEwLampMesh.instanceColor) this.trafficEwLampMesh.instanceColor.needsUpdate = true;
+    masts.computeBoundingSphere();
+    arms.computeBoundingSphere();
+    housings.computeBoundingSphere();
+    this.trafficNsLampMesh.computeBoundingSphere();
+    this.trafficEwLampMesh.computeBoundingSphere();
+
+    this.rootGroup.add(masts, arms, housings, this.trafficNsLampMesh, this.trafficEwLampMesh);
+  }
+
+  // 7c. Glowing Green/Cyan Vehicle Repair & Nitro Refill Service Bays
+  private buildRepairStations() {
+    const count = OPEN_WORLD_REPAIR_STATIONS.length;
+    if (count === 0) return;
+
+    const pillarGeo = new THREE.BoxGeometry(0.55, 4.6, 0.55);
+    const beamGeo = new THREE.BoxGeometry(9.2, 0.65, 0.85);
+    const gantryMat = new THREE.MeshStandardMaterial({
+      color: 0x064e3b,
+      emissive: 0x10b981,
+      emissiveIntensity: 1.4,
+      roughness: 0.3,
+    });
+    const pillars = new THREE.InstancedMesh(pillarGeo, gantryMat, count * 2);
+    const beams = new THREE.InstancedMesh(beamGeo, gantryMat, count);
+
+    const ringGeo = new THREE.RingGeometry(4.4, 5.4, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x34d399,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.78,
+    });
+
+    this.repairBayRingMeshes = [];
+    for (let i = 0; i < count; i++) {
+      const st = OPEN_WORLD_REPAIR_STATIONS[i];
+      const by = getWorldHeightAt(st.x, st.z, 8.0);
+
+      _dummy.position.set(st.x - 4.3, by + 2.3, st.z);
+      _dummy.rotation.set(0, 0, 0);
+      _dummy.scale.setScalar(1);
+      _dummy.updateMatrix();
+      pillars.setMatrixAt(i * 2, _dummy.matrix);
+
+      _dummy.position.set(st.x + 4.3, by + 2.3, st.z);
+      _dummy.updateMatrix();
+      pillars.setMatrixAt(i * 2 + 1, _dummy.matrix);
+
+      _dummy.position.set(st.x, by + 4.6, st.z);
+      _dummy.updateMatrix();
+      beams.setMatrixAt(i, _dummy.matrix);
+
+      const pad = new THREE.Mesh(ringGeo, ringMat);
+      pad.rotation.x = -Math.PI / 2;
+      pad.position.set(st.x, by + 0.14, st.z);
+      this.rootGroup.add(pad);
+      this.repairBayRingMeshes.push(pad);
+    }
+    pillars.instanceMatrix.needsUpdate = true;
+    beams.instanceMatrix.needsUpdate = true;
+    pillars.computeBoundingSphere();
+    beams.computeBoundingSphere();
+    this.rootGroup.add(pillars, beams);
   }
 
   // 8. Interactive Beacons, Street Race Gates, Drift Rings, Speed Traps, Ramps & Collectible Tokens
@@ -1250,6 +1581,11 @@ export class OpenWorldManager {
       if (this.driftZoneScore >= target) {
         this.activeDriftZone.completed = true;
         soundManager.playAchievementUnlock();
+        this.onRecordEvent?.({
+          kind: 'drift',
+          id: this.activeDriftZone.id,
+          value: this.driftZoneScore,
+        });
         this.onActivityReward?.({
           title: `DRIFT ZONE CLEARED: ${this.activeDriftZone.name.toUpperCase()}`,
           coins: this.activeDriftZone.rewardCoins,
@@ -1259,6 +1595,49 @@ export class OpenWorldManager {
       }
       this.activeDriftZone = null;
       this.driftZoneScore = 0;
+    }
+
+    // 3b. Open-World Repair & Nitro Service Bay Check + Traffic Light Cycle
+    this.trafficLightCycle = (this.trafficLightCycle + dt) % 10.5;
+    if (this.trafficNsLampMesh && this.trafficEwLampMesh) {
+      const nsHex =
+        this.trafficLightCycle < 4.5
+          ? 0x22c55e
+          : this.trafficLightCycle < 5.5
+          ? 0xfacc15
+          : 0xef4444;
+      const ewHex =
+        this.trafficLightCycle >= 5.5 && this.trafficLightCycle < 9.5
+          ? 0x22c55e
+          : this.trafficLightCycle >= 9.5
+          ? 0xfacc15
+          : 0xef4444;
+      for (let i = 0; i < OPEN_WORLD_TRAFFIC_LIGHTS.length; i++) {
+        _color.setHex(nsHex);
+        this.trafficNsLampMesh.setColorAt(i, _color);
+        _color.setHex(ewHex);
+        this.trafficEwLampMesh.setColorAt(i, _color);
+      }
+      if (this.trafficNsLampMesh.instanceColor) this.trafficNsLampMesh.instanceColor.needsUpdate = true;
+      if (this.trafficEwLampMesh.instanceColor) this.trafficEwLampMesh.instanceColor.needsUpdate = true;
+    }
+
+    for (let i = 0; i < OPEN_WORLD_REPAIR_STATIONS.length; i++) {
+      const st = OPEN_WORLD_REPAIR_STATIONS[i];
+      const pad = this.repairBayRingMeshes[i];
+      const rdx = playerX - st.x;
+      const rdz = playerZ - st.z;
+      const dSq = rdx * rdx + rdz * rdz;
+      if (pad) {
+        pad.visible = dSq < cullSq;
+        if (pad.visible) {
+          pad.rotation.z += dt * 1.4;
+        }
+      }
+      if (dSq < 10.5 * 10.5 && now > this.repairCooldownUntil) {
+        this.repairCooldownUntil = now + 220;
+        this.onRepairPulse?.(28, 30, st.name);
+      }
     }
 
     // 4. Active Street Race Checkpoints & AI Rivals
@@ -1285,6 +1664,12 @@ export class OpenWorldManager {
             this.racesWon = Math.max(this.racesWon, 1);
           }
 
+          this.onRecordEvent?.({
+            kind: 'race',
+            id: this.activeRace.id,
+            value: Math.round(this.raceElapsed * 10) / 10,
+          });
+
           const payoutCoins = won
             ? this.activeRace.rewardCoins
             : Math.round(this.activeRace.rewardCoins * 0.45);
@@ -1294,8 +1679,8 @@ export class OpenWorldManager {
 
           this.onActivityReward?.({
             title: won
-              ? `RACE VICTORY! #1 ${this.activeRace.name.toUpperCase()}`
-              : `FINISHED #${rank}: ${this.activeRace.name.toUpperCase()}`,
+              ? `RACE VICTORY (${this.raceElapsed.toFixed(1)}s)! #1 ${this.activeRace.name.toUpperCase()}`
+              : `FINISHED #${rank} (${this.raceElapsed.toFixed(1)}s): ${this.activeRace.name.toUpperCase()}`,
             coins: payoutCoins,
             score: payoutScore,
             kind: 'race',
@@ -1417,7 +1802,29 @@ export class OpenWorldManager {
       if (p.car.active) {
         const road = OPEN_WORLD_ROADS[p.roadIdx];
         const segLen = Math.max(1, Math.hypot(road.x2 - road.x1, road.z2 - road.z1));
-        const speedNorm = (p.baseSpeed * dt) / segLen;
+
+        // Pause civilian traffic approaching a Downtown red intersection signal
+        let yieldForRedLight = false;
+        if (!isPolice && road.zone === 'city') {
+          const isNS = Math.abs(road.z2 - road.z1) > Math.abs(road.x2 - road.x1);
+          const nsGreen = this.trafficLightCycle < 5.0;
+          const ewGreen = this.trafficLightCycle >= 5.5 && this.trafficLightCycle < 10.0;
+          const facingRed = (isNS && !nsGreen) || (!isNS && !ewGreen);
+          if (facingRed) {
+            for (let tIdx = 0; tIdx < OPEN_WORLD_TRAFFIC_LIGHTS.length; tIdx++) {
+              const tl = OPEN_WORLD_TRAFFIC_LIGHTS[tIdx];
+              const ldx = p.car.x - tl.x;
+              const ldz = p.car.z - tl.z;
+              if (ldx * ldx + ldz * ldz < 22 * 22 && ldx * ldx + ldz * ldz > 9 * 9) {
+                yieldForRedLight = true;
+                break;
+              }
+            }
+          }
+        }
+
+        const effectiveSpeed = yieldForRedLight ? 0 : p.baseSpeed;
+        const speedNorm = (effectiveSpeed * dt) / segLen;
         p.t += speedNorm * p.dir;
 
         if (p.t >= 1 || p.t <= 0) {
@@ -1533,6 +1940,7 @@ export class OpenWorldManager {
         : null,
       activeRace: racePayload,
       hubs: this.hubs,
+      repairStations: OPEN_WORLD_REPAIR_STATIONS,
       activities: this.activities.map((a) => ({
         id: a.id,
         name: a.name,

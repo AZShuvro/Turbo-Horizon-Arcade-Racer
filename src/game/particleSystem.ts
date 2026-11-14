@@ -189,6 +189,40 @@ export class ParticleSystem {
     }
   }
 
+  public emitDamageSmoke(x: number, y: number, z: number) {
+    const shade = Math.random() > 0.45 ? 0x27272a : 0x52525b;
+    this.emit(
+      x + (Math.random() - 0.5) * 0.45,
+      y + 0.72,
+      z + (Math.random() - 0.5) * 0.45,
+      (Math.random() - 0.5) * 1.1,
+      2.2 + Math.random() * 1.6,
+      (Math.random() - 0.5) * 1.1,
+      0.45 + Math.random() * 0.35,
+      0.55 + Math.random() * 0.3,
+      shade
+    );
+  }
+
+  public emitRepairSparkles(x: number, y: number, z: number, count = 6) {
+    const colors = [0x10b981, 0x34d399, 0x22d3ee, 0xffffff];
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 1.8 + Math.random() * 3.5;
+      this.emit(
+        x + (Math.random() - 0.5) * 1.8,
+        y + 0.3 + Math.random() * 0.8,
+        z + (Math.random() - 0.5) * 2.2,
+        Math.cos(ang) * spd,
+        2.5 + Math.random() * 3.0,
+        Math.sin(ang) * spd,
+        0.26 + Math.random() * 0.16,
+        0.4 + Math.random() * 0.25,
+        colors[Math.floor(Math.random() * colors.length)]
+      );
+    }
+  }
+
   public update(dt: number) {
     let hasUpdates = false;
 

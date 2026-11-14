@@ -9,7 +9,7 @@ import {
   MapPin,
   Trash2,
 } from 'lucide-react';
-import { OpenWorldHudState, WorldZone } from '../types/game';
+import { OpenWorldHudState, WorldZone, WorldRecords } from '../types/game';
 import {
   OPEN_WORLD_ROADS,
   WORLD_HALF_EXTENT,
@@ -25,6 +25,7 @@ interface WorldMapModalProps {
   posZ: number;
   headingDeg: number;
   openWorld: OpenWorldHudState;
+  worldRecords?: WorldRecords;
   onSetWaypoint: (x: number, z: number, label: string) => void;
   onClearWaypoint: () => void;
   onFastTravel: (hubId: string) => void;
@@ -37,6 +38,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
   posZ,
   headingDeg,
   openWorld,
+  worldRecords,
   onSetWaypoint,
   onClearWaypoint,
   onFastTravel,
@@ -134,6 +136,27 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
+    }
+
+    // Repair & Nitro Service Bays
+    if (openWorld.repairStations) {
+      for (let i = 0; i < openWorld.repairStations.length; i++) {
+        const rs = openWorld.repairStations[i];
+        const sx = toScreenX(rs.x);
+        const sy = toScreenY(rs.z);
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx - 3.5, sy);
+        ctx.lineTo(sx + 3.5, sy);
+        ctx.moveTo(sx, sy - 3.5);
+        ctx.lineTo(sx, sy + 3.5);
+        ctx.stroke();
+      }
     }
 
     // Activity Markers
@@ -292,7 +315,11 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
               Open-World Navigation Map
             </h2>
             <p className="text-xs font-mono text-slate-400">
-              {ZONE_LABELS[openWorld.currentZone]} · Tokens {openWorld.tokensCollected}/{openWorld.totalTokens} · Click anywhere on roads to set GPS Waypoint
+              {ZONE_LABELS[openWorld.currentZone]} · Tokens {openWorld.tokensCollected}/{openWorld.totalTokens}
+              {worldRecords && worldRecords.bestJumpMeters > 0
+                ? ` · Best Jump ${worldRecords.bestJumpMeters}m (${worldRecords.bestAirtimeSec.toFixed(1)}s)`
+                : ''}
+              {' · Click anywhere on roads to set GPS Waypoint'}
             </p>
           </div>
 
@@ -413,40 +440,58 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
               </div>
 
               <div className="flex flex-col gap-1.5">
-                {filteredActivities.map((act) => (
-                  <button
-                    key={act.id}
-                    type="button"
-                    onClick={() => onSetWaypoint(act.x, act.z, act.name)}
-                    className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-800 border border-slate-800 text-left cursor-pointer transition-colors"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {act.type === 'street_race' ? (
-                        <Flag className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                      ) : act.type === 'drift_zone' ? (
-                        <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      ) : act.type === 'ramp' ? (
-                        <Zap className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                      ) : (
-                        <Coins className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-                      )}
-                      <div className="flex flex-col min-w-0">
-                        <span className="text-xs font-bold text-slate-100 truncate">
-                          {act.name}
-                        </span>
-                        <span className="text-[10px] font-mono text-slate-400">
-                          {ZONE_LABELS[act.zone]}
-                          {act.completed ? ' · Completed' : ''}
-                        </span>
-                      </div>
-                    </div>
+                {filteredActivities.map((act) => {
+                  const bestRace =
+                    act.type === 'street_race' ? worldRecords?.raceBestTimes[act.id] : undefined;
+                  const bestDrift =
+                    act.type === 'drift_zone' ? worldRecords?.driftBestScores[act.id] : undefined;
+                  const bestRamp =
+                    act.type === 'ramp' ? worldRecords?.rampBestDistances[act.id] : undefined;
+                  const bestTag =
+                    bestRace !== undefined
+                      ? `BEST ${bestRace.toFixed(2)}s`
+                      : bestDrift !== undefined
+                      ? `BEST ${bestDrift.toLocaleString()} PTS`
+                      : bestRamp !== undefined
+                      ? `BEST ${bestRamp}m`
+                      : null;
 
-                    <span className="flex items-center gap-1 text-[10px] font-mono text-cyan-300 shrink-0">
-                      <Navigation className="w-3 h-3" />
-                      GPS
-                    </span>
-                  </button>
-                ))}
+                  return (
+                    <button
+                      key={act.id}
+                      type="button"
+                      onClick={() => onSetWaypoint(act.x, act.z, act.name)}
+                      className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-800 border border-slate-800 text-left cursor-pointer transition-colors"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {act.type === 'street_race' ? (
+                          <Flag className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        ) : act.type === 'drift_zone' ? (
+                          <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        ) : act.type === 'ramp' ? (
+                          <Zap className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                        ) : (
+                          <Coins className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                        )}
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-xs font-bold text-slate-100 truncate">
+                            {act.name}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400 tabular-nums">
+                            {ZONE_LABELS[act.zone]}
+                            {act.completed ? ' · Completed' : ''}
+                            {bestTag ? ` · ${bestTag}` : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      <span className="flex items-center gap-1 text-[10px] font-mono text-cyan-300 shrink-0">
+                        <Navigation className="w-3 h-3" />
+                        GPS
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -463,6 +508,10 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 bg-orange-500" />
                 <span>Jump Ramp</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                <span>Repair &amp; Nitro Bay</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-yellow-400" />

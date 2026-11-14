@@ -11,6 +11,8 @@ import {
   DEFAULT_KEYBINDINGS,
   INITIAL_ACHIEVEMENTS,
   UPGRADE_CONFIG,
+  DEFAULT_CAR_STANCE,
+  DEFAULT_WORLD_RECORDS,
 } from './data/cars';
 import {
   CarStats,
@@ -32,9 +34,12 @@ import {
   MultiplayerRoomState,
   MultiplayerCarConfig,
   OpenWorldHudState,
+  CarStance,
+  EngineAudioProfile,
+  WorldRecords,
 } from './types/game';
 import { TitleScreen } from './components/TitleScreen';
-import { GameHUD } from './components/GameHUD';
+import { GameHUD, FastTelemetryApi } from './components/GameHUD';
 import { GameOverModal, OnlineStandingResult } from './components/GameOverModal';
 import { PauseModal } from './components/PauseModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -59,6 +64,9 @@ const ACHIEVEMENTS_KEY = 'turbo_horizon_achievements';
 const SETTINGS_KEY = 'turbo_horizon_settings';
 const CAR_UPGRADES_KEY = 'turbo_horizon_car_upgrades';
 const PROFILE_KEY = 'turbo_horizon_profile';
+const STANCE_KEY = 'turbo_horizon_stance';
+const ENGINE_PROFILE_KEY = 'turbo_horizon_engine_profile';
+const WORLD_RECORDS_KEY = 'turbo_horizon_records';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -102,7 +110,7 @@ export default function App() {
     }
   });
 
-  // 4. Car Performance Tuning Upgrades Persistence
+  // 4. Car Performance Tuning, Stance & Engine Profile Persistence
   const [carUpgrades, setCarUpgrades] = useState<CarUpgrades>(() => {
     try {
       const saved = localStorage.getItem(CAR_UPGRADES_KEY);
@@ -111,6 +119,39 @@ export default function App() {
       return { engine: 0, handling: 0, nitro: 0 };
     }
   });
+
+  const [carStance, setCarStance] = useState<CarStance>(() => {
+    try {
+      const saved = localStorage.getItem(STANCE_KEY);
+      if (saved) return { ...DEFAULT_CAR_STANCE, ...JSON.parse(saved) };
+    } catch {}
+    return DEFAULT_CAR_STANCE;
+  });
+
+  const [engineAudioProfile, setEngineAudioProfile] = useState<EngineAudioProfile>(() => {
+    try {
+      const saved = localStorage.getItem(ENGINE_PROFILE_KEY);
+      if (saved === 'street_v6' || saved === 'muscle_v8' || saved === 'twin_turbo') {
+        return saved;
+      }
+    } catch {}
+    return 'street_v6';
+  });
+
+  const [worldRecords, setWorldRecords] = useState<WorldRecords>(() => {
+    try {
+      const saved = localStorage.getItem(WORLD_RECORDS_KEY);
+      if (saved) return { ...DEFAULT_WORLD_RECORDS, ...JSON.parse(saved) };
+    } catch {}
+    return DEFAULT_WORLD_RECORDS;
+  });
+
+  const [replayUi, setReplayUi] = useState<{
+    active: boolean;
+    currentSec: number;
+    totalSec: number;
+    cameraLabel: string;
+  } | null>(null);
 
   // 5. Mini-Achievements Persistence
   const [achievements, setAchievements] = useState<Achievement[]>(() => {
@@ -315,6 +356,7 @@ export default function App() {
     posZ?: number;
     heading?: number;
     openWorld?: OpenWorldHudState;
+    health?: number;
   }>({
     score: 0,
     speed: 0,
@@ -336,9 +378,17 @@ export default function App() {
     trunkOpen: false,
     raceRank: 1,
     totalRacers: 4,
+    health: 100,
   });
 
+  const fastTelemetryRef = useRef<FastTelemetryApi | null>(null);
   const [floatingTexts, setFloatingTexts] = useState<FloatingText[]>([]);
+  const pushToast = useCallback((ft: FloatingText) => {
+    setFloatingTexts((prev) => [...prev.slice(-2), ft]);
+    window.setTimeout(() => {
+      setFloatingTexts((prev) => prev.filter((item) => item.id !== ft.id));
+    }, 2500);
+  }, []);
   const [gameOverStats, setGameOverStats] = useState({
     score: 0,
     isNewHigh: false,
@@ -409,21 +459,18 @@ export default function App() {
 
         soundManager.playAchievementUnlock();
 
-        setFloatingTexts((ft) => [
-          ...ft.slice(-3),
-          {
-            id: Date.now() + Math.random(),
-            text: `🏆 ACHIEVEMENT: ${target.title.toUpperCase()} (+${target.rewardCoins} COINS)!`,
-            type: 'powerup',
-            score: target.rewardCoins * 10,
-            timestamp: Date.now(),
-          },
-        ]);
+        pushToast({
+          id: Date.now() + Math.random(),
+          text: `${target.title} · +${target.rewardCoins} Coins`,
+          type: 'powerup',
+          score: target.rewardCoins * 10,
+          timestamp: Date.now(),
+        });
 
         return updated;
       });
     },
-    []
+    [pushToast]
   );
 
   // Mount WebGL Engine once
@@ -435,6 +482,8 @@ export default function App() {
 
     engine.carController.transmission = transmission;
     engine.carController.setUpgrades(carUpgrades);
+    engine.setCarStance(carStance);
+    soundManager.setEngineProfile(engineAudioProfile);
     engine.setCameraView(cameraView);
     engine.setWeather(weather);
     engine.updatePlayerProfileTag(profile.username, profile.tagColor);
@@ -480,19 +529,89 @@ export default function App() {
       setGameState('gameover');
     };
 
+    engine.onFastTelemetry = (speed, nitro, gear, x, z, hDeg, isDrifting) => {
+      fastTelemetryRef.current?.update(speed, nitro, gear, x, z, hDeg, isDrifting);
+    };
+
     engine.onScoreUpdate = (stats) => {
       setHudStats(stats);
     };
 
     engine.onFloatingText = (ft) => {
-      setFloatingTexts((prev) => [...prev.slice(-4), ft]);
-      setTimeout(() => {
-        setFloatingTexts((prev) => prev.filter((item) => item.id !== ft.id));
-      }, 1000);
+      pushToast(ft);
     };
 
     engine.onAchievementTrigger = (achId) => {
       handleTriggerAchievement(achId);
+    };
+
+    engine.onRecordUpdate = (type, id, value, secondary) => {
+      let recordNotice = '';
+      setWorldRecords((prev) => {
+        let changed = false;
+        const next: WorldRecords = {
+          ...prev,
+          raceBestTimes: { ...prev.raceBestTimes },
+          driftBestScores: { ...prev.driftBestScores },
+          rampBestDistances: { ...prev.rampBestDistances },
+        };
+
+        if (type === 'race') {
+          const cur = prev.raceBestTimes[id];
+          if (cur === undefined || value < cur) {
+            next.raceBestTimes[id] = value;
+            changed = true;
+            if (cur !== undefined) recordNotice = `NEW RACE RECORD: ${value.toFixed(2)}s!`;
+          }
+        } else if (type === 'drift') {
+          const cur = prev.driftBestScores[id] || 0;
+          if (value > cur) {
+            next.driftBestScores[id] = value;
+            changed = true;
+            if (cur > 0) recordNotice = `NEW DRIFT RECORD: ${value.toLocaleString()} PTS!`;
+          }
+        } else if (type === 'ramp') {
+          const curRamp = prev.rampBestDistances[id] || 0;
+          if (value > curRamp && id !== 'open-jump') {
+            next.rampBestDistances[id] = value;
+            changed = true;
+          }
+          if (value > prev.bestJumpMeters) {
+            next.bestJumpMeters = value;
+            changed = true;
+            if (prev.bestJumpMeters > 0) recordNotice = `NEW LONGEST JUMP: ${value}m!`;
+          }
+          if (secondary !== undefined && secondary > prev.bestAirtimeSec) {
+            next.bestAirtimeSec = secondary;
+            changed = true;
+          }
+        }
+
+        if (!changed) return prev;
+        try {
+          localStorage.setItem(WORLD_RECORDS_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+
+      if (recordNotice) {
+        pushToast({
+          id: Date.now() + Math.random(),
+          text: recordNotice,
+          type: 'checkpoint',
+          score: 250,
+          timestamp: Date.now(),
+        });
+      }
+    };
+
+    engine.onReplayProgress = (currentSec, totalSec, cameraLabel) => {
+      setReplayUi({ active: true, currentSec, totalSec, cameraLabel });
+    };
+
+    engine.onReplayEnded = (restoreState) => {
+      setReplayUi(null);
+      setGameState(restoreState);
     };
 
     engine.onGameOver = () => {
@@ -667,44 +786,35 @@ export default function App() {
         }
         case 'player:finished': {
           const { username, rank } = evt.payload;
-          setFloatingTexts((ft) => [
-            ...ft.slice(-3),
-            {
-              id: Date.now() + Math.random(),
-              text: `${username} FINISHED #${rank}!`,
-              type: 'checkpoint',
-              score: 0,
-              timestamp: Date.now(),
-            },
-          ]);
+          pushToast({
+            id: Date.now() + Math.random(),
+            text: `${username} finished #${rank}`,
+            type: 'checkpoint',
+            score: 0,
+            timestamp: Date.now(),
+          });
           break;
         }
         case 'player:left': {
           setOnlineBanner(`${evt.payload.username} disconnected from the room.`);
-          setFloatingTexts((ft) => [
-            ...ft.slice(-3),
-            {
-              id: Date.now() + Math.random(),
-              text: `${evt.payload.username} LEFT RACE`,
-              type: 'hazard',
-              score: 0,
-              timestamp: Date.now(),
-            },
-          ]);
+          pushToast({
+            id: Date.now() + Math.random(),
+            text: `${evt.payload.username} left race`,
+            type: 'hazard',
+            score: 0,
+            timestamp: Date.now(),
+          });
           break;
         }
         case 'host:migrated': {
           setOnlineBanner(`Host migrated to ${evt.payload.newHostUsername}`);
-          setFloatingTexts((ft) => [
-            ...ft.slice(-3),
-            {
-              id: Date.now() + Math.random(),
-              text: `NEW HOST: ${evt.payload.newHostUsername}`,
-              type: 'powerup',
-              score: 0,
-              timestamp: Date.now(),
-            },
-          ]);
+          pushToast({
+            id: Date.now() + Math.random(),
+            text: `New host: ${evt.payload.newHostUsername}`,
+            type: 'powerup',
+            score: 0,
+            timestamp: Date.now(),
+          });
           break;
         }
       }
@@ -773,19 +883,16 @@ export default function App() {
         engineRef.current.carController.setUpgrades(newUpgrades);
       }
 
-      setFloatingTexts((ft) => [
-        ...ft.slice(-3),
-        {
-          id: Date.now(),
-          text: `⚡ UPGRADE: ${config.name} (${nextLevelConfig.label.toUpperCase()})!`,
-          type: 'powerup',
-          score: 300,
-          timestamp: Date.now(),
-        },
-      ]);
+      pushToast({
+        id: Date.now(),
+        text: `${config.name} · ${nextLevelConfig.label}`,
+        type: 'powerup',
+        score: 300,
+        timestamp: Date.now(),
+      });
       return true;
     },
-    [carUpgrades, totalCoins]
+    [carUpgrades, totalCoins, pushToast]
   );
 
   // Unlock car
@@ -811,19 +918,16 @@ export default function App() {
         handleSelectCar(carObj);
       }
 
-      setFloatingTexts((ft) => [
-        ...ft.slice(-3),
-        {
-          id: Date.now(),
-          text: `VEHICLE UNLOCKED: ${carObj?.name.toUpperCase()}!`,
-          type: 'powerup',
-          score: 500,
-          timestamp: Date.now(),
-        },
-      ]);
+      pushToast({
+        id: Date.now(),
+        text: `Unlocked: ${carObj?.name || carId}`,
+        type: 'powerup',
+        score: 500,
+        timestamp: Date.now(),
+      });
       return true;
     },
-    [totalCoins, unlockedCars, handleSelectCar]
+    [totalCoins, unlockedCars, handleSelectCar, pushToast]
   );
 
   // Unlock track
@@ -847,19 +951,16 @@ export default function App() {
         engineRef.current.setTrack(trackId);
       }
 
-      setFloatingTexts((ft) => [
-        ...ft.slice(-3),
-        {
-          id: Date.now(),
-          text: `TRACK UNLOCKED: ${trackId.toUpperCase()}!`,
-          type: 'powerup',
-          score: 500,
-          timestamp: Date.now(),
-        },
-      ]);
+      pushToast({
+        id: Date.now(),
+        text: `Track Unlocked: ${trackId}`,
+        type: 'powerup',
+        score: 500,
+        timestamp: Date.now(),
+      });
       return true;
     },
-    [totalCoins, unlockedTracks]
+    [totalCoins, unlockedTracks, pushToast]
   );
 
   // Quality switch
@@ -942,20 +1043,54 @@ export default function App() {
     soundManager.setRadioStation(rs);
   }, []);
 
+  // Car Stance & Engine Profile Handlers
+  const handleChangeCarStance = useCallback((stance: CarStance) => {
+    setCarStance(stance);
+    try {
+      localStorage.setItem(STANCE_KEY, JSON.stringify(stance));
+    } catch {}
+    engineRef.current?.setCarStance(stance);
+  }, []);
+
+  const handleChangeEngineAudioProfile = useCallback((prof: EngineAudioProfile) => {
+    setEngineAudioProfile(prof);
+    soundManager.unlock();
+    soundManager.setEngineProfile(prof);
+    if (prof === 'twin_turbo') {
+      soundManager.playTurboFlutter(0.85);
+    } else {
+      soundManager.playGearShift(true);
+    }
+    try {
+      localStorage.setItem(ENGINE_PROFILE_KEY, prof);
+    } catch {}
+  }, []);
+
+  // Instant 10s Replay Handlers
+  const handleStartReplay = useCallback((restoreState: 'paused' | 'gameover') => {
+    if (!engineRef.current) return;
+    if (engineRef.current.startReplay(restoreState)) {
+      setReplayUi({ active: true, currentSec: 0, totalSec: 10, cameraLabel: 'TRACKSIDE LOW CAM' });
+      setGameState('playing');
+    }
+  }, []);
+
+  const handleExitReplay = useCallback(() => {
+    engineRef.current?.stopReplay();
+    setReplayUi(null);
+  }, []);
+
   const handleCycleRadio = useCallback(() => {
     const nextSt = soundManager.nextRadioStation();
     setRadioStation(nextSt);
-    setFloatingTexts((ft) => [
-      ...ft.slice(-3),
-      {
-        id: Date.now(),
-        text: `📻 RADIO: ${nextSt.toUpperCase()}`,
-        type: 'powerup',
-        score: 0,
-        timestamp: Date.now(),
-      },
-    ]);
-  }, []);
+    pushToast({
+      id: Date.now(),
+      text: `Radio: ${nextSt}`,
+      type: 'powerup',
+      score: 0,
+      timestamp: Date.now(),
+    });
+  }, [pushToast]);
 
   // Photo Mode handlers
   const handleTogglePhotoMode = useCallback(() => {
@@ -1122,8 +1257,12 @@ export default function App() {
       soundManager.unlock();
       const kb = keyBindingsRef.current;
 
-      // Escape / Pause / Close World Map
+      // Escape / Pause / Close World Map / Exit Replay
       if (e.code === 'Escape') {
+        if (engineRef.current?.isReplayActive) {
+          handleExitReplay();
+          return;
+        }
         if (isWorldMapOpen) {
           handleCloseWorldMap();
           return;
@@ -1367,6 +1506,7 @@ export default function App() {
           unlockedCars={unlockedCars}
           unlockedTracks={unlockedTracks}
           carUpgrades={carUpgrades}
+          achievements={achievements}
           onBuyUpgrade={handleBuyUpgrade}
           onSelectCar={handleSelectCar}
           onUpdateCarCustomization={handleUpdateCarCustomization}
@@ -1388,6 +1528,11 @@ export default function App() {
           isFullscreen={isFullscreen}
           onToggleFullscreen={handleToggleFullscreen}
           onStartFullscreenRace={handleStartFullscreenRace}
+          carStance={carStance}
+          onChangeCarStance={handleChangeCarStance}
+          engineAudioProfile={engineAudioProfile}
+          onChangeEngineAudioProfile={handleChangeEngineAudioProfile}
+          worldRecords={worldRecords}
         />
       )}
 
@@ -1421,16 +1566,21 @@ export default function App() {
           doorsOpen={hudStats.doorsOpen}
           trunkOpen={hudStats.trunkOpen}
           heatLevel={hudStats.heatLevel}
+          health={hudStats.health}
+          replayState={replayUi}
+          onExitReplay={handleExitReplay}
           raceRank={hudStats.raceRank}
           totalRacers={hudStats.totalRacers}
           radioStation={radioStation}
           floatingTexts={floatingTexts}
           showTouchControls={showTouchControls}
+          fastTelemetryRef={fastTelemetryRef}
           isFullscreen={isFullscreen}
           onToggleFullscreen={handleToggleFullscreen}
           openWorld={hudStats.openWorld}
           onOpenWorldMap={handleOpenWorldMap}
           onCancelStreetRace={() => engineRef.current?.cancelStreetRace()}
+          onResetCar={() => engineRef.current?.resetCarToRoad()}
           username={profile.username}
           tagColor={profile.tagColor}
           lap={hudStats.lap}
@@ -1502,6 +1652,7 @@ export default function App() {
           posZ={hudStats.posZ || 0}
           headingDeg={hudStats.heading || 0}
           openWorld={hudStats.openWorld}
+          worldRecords={worldRecords}
           onSetWaypoint={(x, z, label) => {
             engineRef.current?.setGpsWaypoint(x, z, label);
           }}
@@ -1536,6 +1687,10 @@ export default function App() {
           onRestart={gameMode === 'online' ? handleResume : handleStartGame}
           onHome={handleHome}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onTogglePhotoMode={handleTogglePhotoMode}
+          onResetCar={() => engineRef.current?.resetCarToRoad()}
+          canReplay={Boolean(engineRef.current?.hasReplayFrames())}
+          onWatchReplay={() => handleStartReplay('paused')}
         />
       )}
 
@@ -1554,6 +1709,8 @@ export default function App() {
           onlineResults={onlineResults}
           isHost={Boolean(onlineRoom && onlineSelfId && onlineRoom.hostId === onlineSelfId)}
           onBackToLobby={() => multiplayerClient.backToLobby()}
+          canReplay={Boolean(engineRef.current?.hasReplayFrames())}
+          onWatchReplay={() => handleStartReplay('gameover')}
         />
       )}
 

@@ -10,6 +10,29 @@ export type WeatherType = 'sunny' | 'sunset' | 'night' | 'rain';
 
 export type TransmissionType = 'automatic' | 'manual';
 
+export type EngineAudioProfile = 'street_v6' | 'muscle_v8' | 'twin_turbo';
+
+export interface CarStance {
+  rideHeight: number; // -0.14 (slammed) to +0.20 (raised)
+  camberDeg: number;  // -10 (negative stance camber) to +2 deg
+}
+
+export interface WorldRecords {
+  raceBestTimes: Record<string, number>;
+  driftBestScores: Record<string, number>;
+  rampBestDistances: Record<string, number>;
+  bestJumpMeters: number;
+  bestAirtimeSec: number;
+}
+
+export interface OpenWorldRepairStation {
+  id: string;
+  name: string;
+  zone: WorldZone;
+  x: number;
+  z: number;
+}
+
 export type OpenWorldActivityType =
   | 'street_race'
   | 'drift_zone'
@@ -95,6 +118,7 @@ export interface OpenWorldHudState {
     elapsed: number;
   } | null;
   hubs: OpenWorldHub[];
+  repairStations?: OpenWorldRepairStation[];
   activities: Array<{
     id: string;
     name: string;

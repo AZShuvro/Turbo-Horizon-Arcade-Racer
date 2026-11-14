@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DecalType } from '../types/game';
+import { CarStance, DecalType } from '../types/game';
 
 // Shared material cache to save memory and optimize draw calls on low-end laptops
 const materialsCache = new Map<string, THREE.Material>();
@@ -162,41 +162,53 @@ export function createPlayerCar(
   const root = new THREE.Group();
   root.name = 'player-car';
 
+  // Separate suspended bodyGroup from grounded wheel mounts so rideHeight & camber adjust cleanly
+  const bodyGroup = new THREE.Group();
+  bodyGroup.name = 'car-body-group';
+  root.add(bodyGroup);
+
   const bodyMat = createCarMaterial(primaryColorHex, 0.7, 0.2);
   const accentMat = createCarMaterial(accentColorHex, 0.5, 0.3);
 
-  // Wheels container for rotation animation
+  // Wheels container for spin animation & outer mounts for steer + camber
   const wheels: THREE.Group[] = [];
+  const wheelMounts: THREE.Group[] = [];
+
+  const addMountedWheel = (radius: number, width: number, wx: number, wy: number, wz: number) => {
+    const mount = new THREE.Group();
+    mount.position.set(wx, wy, wz);
+    mount.rotation.order = 'YXZ';
+    const wheel = createWheel(radius, width);
+    mount.add(wheel);
+    root.add(mount);
+    wheelMounts.push(mount);
+    wheels.push(wheel);
+  };
 
   if (carId === 'viper') {
     // Muscle car: Wide, aggressive, dual hood scoops, drag wing
-    // 1. Lower chassis
     const chassisGeo = new THREE.BoxGeometry(1.8, 0.42, 4.2);
     const chassis = new THREE.Mesh(chassisGeo, bodyMat);
     chassis.position.y = 0.45;
     chassis.castShadow = true;
-    root.add(chassis);
+    bodyGroup.add(chassis);
 
-    // 2. Cabin
     const cabinGeo = new THREE.BoxGeometry(1.5, 0.48, 2.2);
     const cabin = new THREE.Mesh(cabinGeo, glassMat);
     cabin.position.set(0, 0.85, -0.2);
     cabin.castShadow = true;
-    root.add(cabin);
+    bodyGroup.add(cabin);
 
-    // 3. Cabin roof strip
     const roofGeo = new THREE.BoxGeometry(1.4, 0.08, 1.8);
     const roof = new THREE.Mesh(roofGeo, bodyMat);
     roof.position.set(0, 1.11, -0.2);
-    root.add(roof);
+    bodyGroup.add(roof);
 
-    // 4. Hood intake scoop
     const scoopGeo = new THREE.BoxGeometry(0.7, 0.14, 1.1);
     const scoop = new THREE.Mesh(scoopGeo, accentMat);
     scoop.position.set(0, 0.7, 1.0);
-    root.add(scoop);
+    bodyGroup.add(scoop);
 
-    // 5. Rear spoiler
     const wingGeo = new THREE.BoxGeometry(1.8, 0.06, 0.45);
     const wing = new THREE.Mesh(wingGeo, accentMat);
     wing.position.set(0, 1.0, -1.9);
@@ -205,51 +217,39 @@ export function createPlayerCar(
     postL.position.set(-0.6, 0.8, -1.9);
     const postR = new THREE.Mesh(postGeo, accentMat);
     postR.position.set(0.6, 0.8, -1.9);
-    root.add(wing, postL, postR);
+    bodyGroup.add(wing, postL, postR);
 
-    // 6. Front splitter bumper
     const bumperGeo = new THREE.BoxGeometry(1.9, 0.12, 0.4);
     const bumper = new THREE.Mesh(bumperGeo, accentMat);
     bumper.position.set(0, 0.28, 2.1);
-    root.add(bumper);
+    bodyGroup.add(bumper);
 
-    // 7. Headlights
     const hlGeo = new THREE.BoxGeometry(0.35, 0.12, 0.1);
     const hlL = new THREE.Mesh(hlGeo, headlightMat);
     hlL.position.set(-0.65, 0.48, 2.11);
     const hlR = new THREE.Mesh(hlGeo, headlightMat);
     hlR.position.set(0.65, 0.48, 2.11);
-    root.add(hlL, hlR);
+    bodyGroup.add(hlL, hlR);
 
-    // 8. Taillights
     const tlGeo = new THREE.BoxGeometry(0.4, 0.1, 0.1);
     const tlL = new THREE.Mesh(tlGeo, taillightMat);
     tlL.position.set(-0.65, 0.48, -2.11);
     const tlR = new THREE.Mesh(tlGeo, taillightMat);
     tlR.position.set(0.65, 0.48, -2.11);
-    root.add(tlL, tlR);
+    bodyGroup.add(tlL, tlR);
 
-    // 9. Dual exhaust
     const exhGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.25, 8);
     exhGeo.rotateX(Math.PI / 2);
     const exhL = new THREE.Mesh(exhGeo, chromeMat);
     exhL.position.set(-0.5, 0.3, -2.15);
     const exhR = new THREE.Mesh(exhGeo, chromeMat);
     exhR.position.set(0.5, 0.3, -2.15);
-    root.add(exhL, exhR);
+    bodyGroup.add(exhL, exhR);
 
-    // Wheels (4)
-    const wFL = createWheel(0.38, 0.28);
-    wFL.position.set(-0.95, 0.38, 1.25);
-    const wFR = createWheel(0.38, 0.28);
-    wFR.position.set(0.95, 0.38, 1.25);
-    const wRL = createWheel(0.42, 0.32);
-    wRL.position.set(-0.96, 0.42, -1.25);
-    const wRR = createWheel(0.42, 0.32);
-    wRR.position.set(0.96, 0.42, -1.25);
-
-    root.add(wFL, wFR, wRL, wRR);
-    wheels.push(wFL, wFR, wRL, wRR);
+    addMountedWheel(0.38, 0.28, -0.95, 0.38, 1.25);
+    addMountedWheel(0.38, 0.28, 0.95, 0.38, 1.25);
+    addMountedWheel(0.42, 0.32, -0.96, 0.42, -1.25);
+    addMountedWheel(0.42, 0.32, 0.96, 0.42, -1.25);
 
   } else if (carId === 'cyber') {
     // Cyber Brawler: Angular cyberpunk pickup/tank
@@ -257,39 +257,29 @@ export function createPlayerCar(
     const body = new THREE.Mesh(wedgeGeo, bodyMat);
     body.position.y = 0.55;
     body.castShadow = true;
-    root.add(body);
+    bodyGroup.add(body);
 
     const cabinGeo = new THREE.BoxGeometry(1.6, 0.6, 2.0);
     const cabin = new THREE.Mesh(cabinGeo, glassMat);
     cabin.position.set(0, 1.05, 0.1);
-    root.add(cabin);
+    bodyGroup.add(cabin);
 
-    // Angular roof bar
     const barGeo = new THREE.BoxGeometry(1.65, 0.1, 0.15);
     const lightBar = new THREE.Mesh(barGeo, headlightMat);
     lightBar.position.set(0, 1.38, 0.4);
-    root.add(lightBar);
+    bodyGroup.add(lightBar);
 
-    // Cyber LED light strip across front
     const stripGeo = new THREE.BoxGeometry(1.85, 0.08, 0.1);
     const frontStrip = new THREE.Mesh(stripGeo, headlightMat);
     frontStrip.position.set(0, 0.62, 2.16);
     const rearStrip = new THREE.Mesh(stripGeo, taillightMat);
     rearStrip.position.set(0, 0.62, -2.16);
-    root.add(frontStrip, rearStrip);
+    bodyGroup.add(frontStrip, rearStrip);
 
-    // Oversized off-road wheels
-    const wFL = createWheel(0.45, 0.32);
-    wFL.position.set(-1.05, 0.45, 1.3);
-    const wFR = createWheel(0.45, 0.32);
-    wFR.position.set(1.05, 0.45, 1.3);
-    const wRL = createWheel(0.45, 0.32);
-    wRL.position.set(-1.05, 0.45, -1.3);
-    const wRR = createWheel(0.45, 0.32);
-    wRR.position.set(1.05, 0.45, -1.3);
-
-    root.add(wFL, wFR, wRL, wRR);
-    wheels.push(wFL, wFR, wRL, wRR);
+    addMountedWheel(0.45, 0.32, -1.05, 0.45, 1.3);
+    addMountedWheel(0.45, 0.32, 1.05, 0.45, 1.3);
+    addMountedWheel(0.45, 0.32, -1.05, 0.45, -1.3);
+    addMountedWheel(0.45, 0.32, 1.05, 0.45, -1.3);
 
   } else if (carId === 'formula') {
     // Formula Sprint: Super lightweight aerodynamic racer
@@ -297,26 +287,23 @@ export function createPlayerCar(
     const nose = new THREE.Mesh(noseGeo, bodyMat);
     nose.position.y = 0.35;
     nose.castShadow = true;
-    root.add(nose);
+    bodyGroup.add(nose);
 
-    // Cockpit & Helmet
     const cockpitGeo = new THREE.BoxGeometry(0.7, 0.35, 1.4);
     const cockpit = new THREE.Mesh(cockpitGeo, glassMat);
     cockpit.position.set(0, 0.55, -0.3);
-    root.add(cockpit);
+    bodyGroup.add(cockpit);
 
     const helmetGeo = new THREE.SphereGeometry(0.2, 8, 8);
     const helmet = new THREE.Mesh(helmetGeo, accentMat);
     helmet.position.set(0, 0.72, -0.2);
-    root.add(helmet);
+    bodyGroup.add(helmet);
 
-    // Front Wing
     const fWingGeo = new THREE.BoxGeometry(2.1, 0.06, 0.5);
     const fWing = new THREE.Mesh(fWingGeo, accentMat);
     fWing.position.set(0, 0.22, 2.1);
-    root.add(fWing);
+    bodyGroup.add(fWing);
 
-    // High Rear Wing
     const rWingGeo = new THREE.BoxGeometry(1.8, 0.08, 0.6);
     const rWing = new THREE.Mesh(rWingGeo, accentMat);
     rWing.position.set(0, 0.95, -2.0);
@@ -324,56 +311,42 @@ export function createPlayerCar(
     pL.position.set(-0.5, 0.7, -2.0);
     const pR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.06), accentMat);
     pR.position.set(0.5, 0.7, -2.0);
-    root.add(rWing, pL, pR);
+    bodyGroup.add(rWing, pL, pR);
 
-    // Exhaust
     const exh = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8), chromeMat);
     exh.rotateX(Math.PI / 2);
     exh.position.set(0, 0.45, -2.15);
-    root.add(exh);
+    bodyGroup.add(exh);
 
-    // Open wheels
-    const wFL = createWheel(0.38, 0.3);
-    wFL.position.set(-1.05, 0.38, 1.4);
-    const wFR = createWheel(0.38, 0.3);
-    wFR.position.set(1.05, 0.38, 1.4);
-    const wRL = createWheel(0.44, 0.36);
-    wRL.position.set(-1.1, 0.44, -1.3);
-    const wRR = createWheel(0.44, 0.36);
-    wRR.position.set(1.1, 0.44, -1.3);
-
-    root.add(wFL, wFR, wRL, wRR);
-    wheels.push(wFL, wFR, wRL, wRR);
+    addMountedWheel(0.38, 0.3, -1.05, 0.38, 1.4);
+    addMountedWheel(0.38, 0.3, 1.05, 0.38, 1.4);
+    addMountedWheel(0.44, 0.36, -1.1, 0.44, -1.3);
+    addMountedWheel(0.44, 0.36, 1.1, 0.44, -1.3);
 
   } else {
     // Default: Apex Cruiser (Sleek aerodynamic GT Coupe)
-    // 1. Lower chassis
     const chassisGeo = new THREE.BoxGeometry(1.7, 0.4, 4.0);
     const chassis = new THREE.Mesh(chassisGeo, bodyMat);
     chassis.position.y = 0.42;
     chassis.castShadow = true;
-    root.add(chassis);
+    bodyGroup.add(chassis);
 
-    // 2. Tapered cabin
     const cabinGeo = new THREE.BoxGeometry(1.35, 0.42, 2.0);
     const cabin = new THREE.Mesh(cabinGeo, glassMat);
     cabin.position.set(0, 0.78, -0.2);
     cabin.castShadow = true;
-    root.add(cabin);
+    bodyGroup.add(cabin);
 
-    // 3. Curved roof
     const roofGeo = new THREE.BoxGeometry(1.25, 0.06, 1.5);
     const roof = new THREE.Mesh(roofGeo, bodyMat);
     roof.position.set(0, 1.0, -0.2);
-    root.add(roof);
+    bodyGroup.add(roof);
 
-    // 4. Aerodynamic hood curve
     const hoodGeo = new THREE.BoxGeometry(1.5, 0.1, 1.4);
     const hood = new THREE.Mesh(hoodGeo, bodyMat);
     hood.position.set(0, 0.55, 1.0);
-    root.add(hood);
+    bodyGroup.add(hood);
 
-    // 5. Rear wing
     const wingGeo = new THREE.BoxGeometry(1.6, 0.05, 0.35);
     const wing = new THREE.Mesh(wingGeo, accentMat);
     wing.position.set(0, 0.85, -1.8);
@@ -381,45 +354,34 @@ export function createPlayerCar(
     pL.position.set(-0.55, 0.72, -1.8);
     const pR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.06), accentMat);
     pR.position.set(0.55, 0.72, -1.8);
-    root.add(wing, pL, pR);
+    bodyGroup.add(wing, pL, pR);
 
-    // 6. Headlights
     const hlGeo = new THREE.BoxGeometry(0.3, 0.1, 0.1);
     const hlL = new THREE.Mesh(hlGeo, headlightMat);
     hlL.position.set(-0.6, 0.45, 2.01);
     const hlR = new THREE.Mesh(hlGeo, headlightMat);
     hlR.position.set(0.6, 0.45, 2.01);
-    root.add(hlL, hlR);
+    bodyGroup.add(hlL, hlR);
 
-    // 7. Taillights
     const tlGeo = new THREE.BoxGeometry(0.35, 0.08, 0.1);
     const tlL = new THREE.Mesh(tlGeo, taillightMat);
     tlL.position.set(-0.58, 0.45, -2.01);
     const tlR = new THREE.Mesh(tlGeo, taillightMat);
     tlR.position.set(0.58, 0.45, -2.01);
-    root.add(tlL, tlR);
+    bodyGroup.add(tlL, tlR);
 
-    // 8. Dual chrome exhaust
     const exhGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.2, 8);
     exhGeo.rotateX(Math.PI / 2);
     const exhL = new THREE.Mesh(exhGeo, chromeMat);
     exhL.position.set(-0.4, 0.26, -2.05);
     const exhR = new THREE.Mesh(exhGeo, chromeMat);
     exhR.position.set(0.4, 0.26, -2.05);
-    root.add(exhL, exhR);
+    bodyGroup.add(exhL, exhR);
 
-    // Wheels
-    const wFL = createWheel(0.36, 0.25);
-    wFL.position.set(-0.88, 0.36, 1.2);
-    const wFR = createWheel(0.36, 0.25);
-    wFR.position.set(0.88, 0.36, 1.2);
-    const wRL = createWheel(0.38, 0.28);
-    wRL.position.set(-0.88, 0.38, -1.2);
-    const wRR = createWheel(0.38, 0.28);
-    wRR.position.set(0.88, 0.38, -1.2);
-
-    root.add(wFL, wFR, wRL, wRR);
-    wheels.push(wFL, wFR, wRL, wRR);
+    addMountedWheel(0.36, 0.25, -0.88, 0.36, 1.2);
+    addMountedWheel(0.36, 0.25, 0.88, 0.36, 1.2);
+    addMountedWheel(0.38, 0.28, -0.88, 0.38, -1.2);
+    addMountedWheel(0.38, 0.28, 0.88, 0.38, -1.2);
   }
 
   // Soft contact shadow plane beneath the car
@@ -435,39 +397,36 @@ export function createPlayerCar(
   shadowPlane.position.y = 0.02;
   root.add(shadowPlane);
 
-  // Apply custom racing decals & stripes
-  applyCarDecals(root, carId, decalType, stripeColorHex);
+  // Apply custom racing decals & stripes onto suspended body
+  applyCarDecals(bodyGroup, carId, decalType, stripeColorHex);
 
   // --- INTERACTIVE VEHICLE CONTROLS & OPENABLES ---
-  // 1. Interactive Doors (Hinged low-poly door panels)
   const doorMat = createCarMaterial(primaryColorHex, 0.7, 0.2);
   const doorL = new THREE.Group();
-  doorL.position.set(-0.86, 0.5, 0.45); // Left front hinge pivot
+  doorL.position.set(-0.86, 0.5, 0.45);
   const doorPanelL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 1.1), doorMat);
-  doorPanelL.position.set(0, 0, -0.55); // offset relative to hinge
+  doorPanelL.position.set(0, 0, -0.55);
   const handleL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.14), chromeMat);
   handleL.position.set(-0.02, 0.05, -0.9);
   doorL.add(doorPanelL, handleL);
-  root.add(doorL);
+  bodyGroup.add(doorL);
 
   const doorR = new THREE.Group();
-  doorR.position.set(0.86, 0.5, 0.45); // Right front hinge pivot
+  doorR.position.set(0.86, 0.5, 0.45);
   const doorPanelR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 1.1), doorMat);
   doorPanelR.position.set(0, 0, -0.55);
   const handleR = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.14), chromeMat);
   handleR.position.set(0.02, 0.05, -0.9);
   doorR.add(doorPanelR, handleR);
-  root.add(doorR);
+  bodyGroup.add(doorR);
 
-  // 2. Interactive Rear Trunk Lid (Hinged at top/front of trunk)
   const trunk = new THREE.Group();
-  trunk.position.set(0, 0.68, -1.05); // Trunk hinge pivot
+  trunk.position.set(0, 0.68, -1.05);
   const trunkLid = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.95), doorMat);
   trunkLid.position.set(0, 0, -0.48);
   trunk.add(trunkLid);
-  root.add(trunk);
+  bodyGroup.add(trunk);
 
-  // 3. Interactive Amber Turn / Hazard Indicators
   const indicatorMatOff = new THREE.MeshStandardMaterial({
     color: 0x78350f,
     roughness: 0.5,
@@ -480,24 +439,22 @@ export function createPlayerCar(
   indRL.position.set(-0.84, 0.46, -1.95);
   const indRR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.08), indicatorMatOff.clone());
   indRR.position.set(0.84, 0.46, -1.95);
-  root.add(indFL, indFR, indRL, indRR);
+  bodyGroup.add(indFL, indFR, indRL, indRR);
 
-  // 4. Interactive Forward Headlights & Road Spotlights
   const spotL = new THREE.SpotLight(0xfff7ed, 4.5, 45, Math.PI / 6, 0.35, 1.2);
   spotL.position.set(-0.6, 0.5, 2.0);
   const targetL = new THREE.Object3D();
   targetL.position.set(-0.6, 0.1, 24);
-  root.add(spotL, targetL);
+  bodyGroup.add(spotL, targetL);
   spotL.target = targetL;
 
   const spotR = new THREE.SpotLight(0xfff7ed, 4.5, 45, Math.PI / 6, 0.35, 1.2);
   spotR.position.set(0.6, 0.5, 2.0);
   const targetR = new THREE.Object3D();
   targetR.position.set(0.6, 0.1, 24);
-  root.add(spotR, targetR);
+  bodyGroup.add(spotR, targetR);
   spotR.target = targetR;
 
-  // Emissive front headlight lenses
   const hlLensMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     emissive: 0xfff7ed,
@@ -508,11 +465,12 @@ export function createPlayerCar(
   hlLensL.position.set(-0.6, 0.45, 2.04);
   const hlLensR = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.06), hlLensMat);
   hlLensR.position.set(0.6, 0.45, 2.04);
-  root.add(hlLensL, hlLensR);
+  bodyGroup.add(hlLensL, hlLensR);
 
-  // Attach all references to userData for controller manipulation
   (root as any).userData = {
+    bodyGroup,
     wheels,
+    wheelMounts,
     carId,
     decalType,
     stripeColorHex,
@@ -530,6 +488,27 @@ export function createPlayerCar(
   };
 
   return root;
+}
+
+/**
+ * Applies live suspension ride height and negative/positive wheel camber without rebuilding geometry
+ */
+export function applyCarStance(carRoot: THREE.Group, stance: CarStance) {
+  const ud = (carRoot as any).userData;
+  if (!ud) return;
+  if (ud.bodyGroup) {
+    ud.bodyGroup.position.y = Math.max(-0.15, Math.min(0.24, stance.rideHeight));
+  }
+  const mounts = ud.wheelMounts as THREE.Group[] | undefined;
+  if (mounts && mounts.length === 4) {
+    const camberRad = (stance.camberDeg * Math.PI) / 180;
+    // Left wheels (x < 0): negative camber tilts top inward (+X) -> negative Z rotation (-camberRad)
+    // Right wheels (x > 0): negative camber tilts top inward (-X) -> positive Z rotation (+camberRad)
+    mounts[0].rotation.z = -camberRad;
+    mounts[1].rotation.z = camberRad;
+    mounts[2].rotation.z = -camberRad;
+    mounts[3].rotation.z = camberRad;
+  }
 }
 
 /**

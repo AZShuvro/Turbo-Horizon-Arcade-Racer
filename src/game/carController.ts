@@ -1,14 +1,19 @@
 import * as THREE from 'three';
-import { CarStats, PlayerInput, FloatingText, TransmissionType, CarUpgrades } from '../types/game';
+import { CarStance, CarStats, PlayerInput, FloatingText, TransmissionType, CarUpgrades } from '../types/game';
 import { soundManager } from '../audio/soundManager';
 import { ParticleSystem } from './particleSystem';
 import { TrackManager } from './trackManager';
 import { OpenWorldManager } from './OpenWorldManager';
-import { createShieldBubble } from './proceduralModels';
+import { applyCarStance, createShieldBubble } from './proceduralModels';
+import {
+  DEFAULT_CAR_STANCE,
+} from '../data/cars';
 import {
   OPEN_WORLD_RAMPS,
+  STUNT_LOOP_DEF,
   WORLD_HALF_EXTENT,
   getWorldHeightAt,
+  isInsideTunnel,
 } from './openWorldData';
 
 const GEAR_SPEED_LIMITS = [
@@ -80,6 +85,19 @@ export class CarController {
   private doorAngle = 0;
   private trunkAngle = 0;
 
+  // --- VEHICLE HEALTH & STANCE ---
+  public health = 100; // 15..100
+  private damageSmokeTimer = 0;
+  public stance: CarStance = { ...DEFAULT_CAR_STANCE };
+
+  // --- AIRTIME & JUMP TRACKING + LOOP-THE-LOOP ---
+  private airStartX = 0;
+  private airStartZ = 0;
+  private airTimeElapsed = 0;
+  private lastRampId: string | undefined;
+  private loopProgress = -1; // -1 = inactive, 0..2*PI around loop
+  private loopCooldown = 0;
+
   // Stats for achievements & cops
   public copsEvadedTime = 0;
   public magnetCoinsDrawn = 0;
@@ -89,6 +107,7 @@ export class CarController {
   public onCrash?: () => void;
   public onCheckpointPassed?: () => void;
   public onAchievementTrigger?: (id: string) => void;
+  public onJumpLanded?: (distMeters: number, airtimeSec: number, rampId?: string) => void;
 
   constructor(
     mesh: THREE.Group,
@@ -102,6 +121,7 @@ export class CarController {
     this.trackManager = trackManager;
     this.maxSpeed = 38 + stats.topSpeed * 0.35; // scales with car top speed
     this.initShieldBubble();
+    applyCarStance(this.mesh, this.stance);
   }
 
   private initShieldBubble() {
@@ -115,6 +135,21 @@ export class CarController {
     this.stats = stats;
     this.maxSpeed = 38 + (stats.topSpeed + this.upgrades.engine * 6) * 0.35;
     this.initShieldBubble();
+    applyCarStance(this.mesh, this.stance);
+  }
+
+  public setStance(stance: CarStance) {
+    this.stance = { ...stance };
+    applyCarStance(this.mesh, this.stance);
+  }
+
+  public healAndRefill(hpDelta: number, nitroDelta: number): boolean {
+    const maxNitro = 100 + this.upgrades.nitro * 15;
+    const needed = this.health < 100 || this.nitroAmount < maxNitro - 1;
+    this.health = Math.min(100, this.health + hpDelta);
+    this.nitroAmount = Math.min(maxNitro, this.nitroAmount + nitroDelta);
+    this.particleSystem.emitRepairSparkles(this.x, this.y, this.z, 5);
+    return needed && this.health >= 100 && this.nitroAmount >= maxNitro - 1;
   }
 
   public setUpgrades(upgrades: CarUpgrades) {
@@ -321,11 +356,46 @@ export class CarController {
     }
 
 
-    // Determine current gear top speed limit
-    let currentMaxSpeed = this.maxSpeed;
+    // Emit dark engine-bay smoke when durability < 50%
+    if (this.health < 50) {
+      this.damageSmokeTimer += clampedDt;
+      if (this.damageSmokeTimer > 0.08) {
+        this.damageSmokeTimer = 0;
+        const fwdX = Math.sin(this.headingAngle) * 1.4;
+        const fwdZ = Math.cos(this.headingAngle) * 1.4;
+        this.particleSystem.emitDamageSmoke(
+          this.x + (this.isOpenWorld ? fwdX : 0),
+          this.y,
+          this.z + (this.isOpenWorld ? fwdZ : 1.4)
+        );
+      }
+    }
+
+    // Tunnel Auto-Highbeam Boost when driving underground
+    const inTunnelNow = this.isOpenWorld && isInsideTunnel(this.x, this.y, this.z);
+    const carUd = (this.mesh as any).userData;
+    if (carUd?.spotLights) {
+      const targetIntensity = inTunnelNow ? 9.5 : 4.5;
+      const targetDist = inTunnelNow ? 75 : 45;
+      for (const spot of carUd.spotLights) {
+        spot.visible = this.headlightsActive || inTunnelNow;
+        spot.intensity = targetIntensity;
+        spot.distance = targetDist;
+      }
+    }
+    if (carUd?.headlights) {
+      const lensEmissive = this.headlightsActive || inTunnelNow ? (inTunnelNow ? 3.8 : 2.5) : 0.05;
+      for (const hl of carUd.headlights) {
+        if (hl.material) hl.material.emissiveIntensity = lensEmissive;
+      }
+    }
+
+    // Determine current gear top speed limit + vehicle durability penalty
+    const damageScale = this.health < 65 ? 0.78 + 0.22 * (this.health / 65) : 1.0;
+    let currentMaxSpeed = this.maxSpeed * damageScale;
     if (this.transmission === 'manual') {
       const gearLimit = GEAR_SPEED_LIMITS[this.currentGear];
-      currentMaxSpeed = Math.min(this.maxSpeed, gearLimit);
+      currentMaxSpeed = Math.min(currentMaxSpeed, gearLimit * damageScale);
     }
     if (this.isNitroActive) {
       currentMaxSpeed *= 1.35;
@@ -480,55 +550,109 @@ export class CarController {
       this.particleSystem.emitNitroFlame(this.x + 0.45, this.y + 0.25, this.z - 2.0);
     }
 
-    // 5. Airborne Physics, Elevation & Stunt Jump Ramps
-    const groundY = this.isOpenWorld ? getWorldHeightAt(this.x, this.z, this.y) : 0;
+    // 5. Airborne Physics, Loop-the-Loop, Elevation & Stunt Jump Ramps
+    if (this.loopCooldown > 0) this.loopCooldown = Math.max(0, this.loopCooldown - clampedDt);
 
-    if (this.isOpenWorld && !this.isAirborne && this.speed > 26) {
-      for (let i = 0; i < OPEN_WORLD_RAMPS.length; i++) {
-        const r = OPEN_WORLD_RAMPS[i];
-        const dx = this.x - r.x;
-        const dz = this.z - r.z;
-        const cos = Math.cos(-r.rotY);
-        const sin = Math.sin(-r.rotY);
-        const lx = dx * cos - dz * sin;
-        const lz = dx * sin + dz * cos;
-        if (Math.abs(lx) < r.width * 0.52 && lz > r.length * 0.25 && lz < r.length * 0.55) {
-          this.isAirborne = true;
-          this.vy = Math.min(18, 9.5 + (this.speed - 25) * 0.22);
-          soundManager.playJump();
-          this.onAchievementTrigger?.('big-air');
-          this.openWorldManager?.onActivityReward?.({
-            title: `STUNT JUMP: ${r.name.toUpperCase()}`,
-            coins: 65,
-            score: 900,
-            kind: 'ramp',
-          });
-          break;
-        }
+    // Check Mega Turbine Loop-the-Loop entry at Stunt Airport
+    if (this.isOpenWorld && this.loopProgress < 0 && this.loopCooldown <= 0 && Math.abs(this.speed) > 28) {
+      const ldx = Math.abs(this.x - STUNT_LOOP_DEF.x);
+      const ldz = Math.abs(this.z - STUNT_LOOP_DEF.z);
+      if (ldx < STUNT_LOOP_DEF.width * 0.55 && ldz < 4.5 && this.y < 1.5) {
+        this.loopProgress = 0;
+        this.isAirborne = false;
+        soundManager.playJump();
+        this.onAchievementTrigger?.('big-air');
       }
     }
 
-    if (this.isAirborne) {
-      this.y += this.vy * clampedDt;
-      this.vy -= 26 * clampedDt; // Gravity
+    if (this.loopProgress >= 0) {
+      // Traverse full 360-degree vertical loop smoothly
+      const angularSpeed = Math.max(2.6, Math.abs(this.speed) / STUNT_LOOP_DEF.radius);
+      this.loopProgress += angularSpeed * clampedDt;
+      const frac = Math.min(1, this.loopProgress / (Math.PI * 2));
+      const ang = this.loopProgress;
+      this.x = STUNT_LOOP_DEF.x + (frac - 0.5) * 3.2;
+      this.y = STUNT_LOOP_DEF.radius - Math.cos(ang) * STUNT_LOOP_DEF.radius;
+      this.z = STUNT_LOOP_DEF.z + Math.sin(ang) * STUNT_LOOP_DEF.radius;
+      this.pitch = -ang;
+      this.roll = 0;
 
-      this.pitch = THREE.MathUtils.damp(this.pitch, 0.25, 4, clampedDt);
-      this.roll = THREE.MathUtils.damp(this.roll, steerTarget * 0.35, 6, clampedDt);
-
-      if (this.y <= groundY) {
-        this.y = groundY;
-        this.vy = 0;
-        this.isAirborne = false;
+      if (this.loopProgress >= Math.PI * 2) {
+        this.loopProgress = -1;
+        this.loopCooldown = 2.0;
+        this.y = 0;
         this.pitch = 0;
-        this.roll = 0;
-        soundManager.playCrash();
-        this.particleSystem.emitTireSmoke(this.x - 0.9, groundY, this.z - 1.2);
-        this.particleSystem.emitTireSmoke(this.x + 0.9, groundY, this.z - 1.2);
+        this.z = STUNT_LOOP_DEF.z + 5.5;
+        this.openWorldManager?.onActivityReward?.({
+          title: 'MEGA TURBINE LOOP-THE-LOOP!',
+          coins: 120,
+          score: 1800,
+          kind: 'ramp',
+        });
       }
     } else {
-      this.y = THREE.MathUtils.damp(this.y, groundY, 18, clampedDt);
-      this.pitch = -input.forward ? 0.03 : input.backward ? -0.04 : 0;
-      this.roll = THREE.MathUtils.damp(this.roll, -this.steerAngle * 0.15, 10, clampedDt);
+      const groundY = this.isOpenWorld ? getWorldHeightAt(this.x, this.z, this.y) : 0;
+
+      if (this.isOpenWorld && !this.isAirborne && this.speed > 26) {
+        for (let i = 0; i < OPEN_WORLD_RAMPS.length; i++) {
+          const r = OPEN_WORLD_RAMPS[i];
+          if (Math.abs(this.y - (r.baseY + r.height)) > 3.5 && this.y < r.baseY - 1.0) continue;
+          const dx = this.x - r.x;
+          const dz = this.z - r.z;
+          const cos = Math.cos(-r.rotY);
+          const sin = Math.sin(-r.rotY);
+          const lx = dx * cos - dz * sin;
+          const lz = dx * sin + dz * cos;
+          if (Math.abs(lx) < r.width * 0.52 && lz > r.length * 0.25 && lz < r.length * 0.55) {
+            this.isAirborne = true;
+            this.airStartX = this.x;
+            this.airStartZ = this.z;
+            this.airTimeElapsed = 0;
+            this.lastRampId = r.id;
+            this.vy = Math.min(19, 9.8 + (this.speed - 25) * 0.24);
+            soundManager.playJump();
+            this.onAchievementTrigger?.('big-air');
+            this.openWorldManager?.onActivityReward?.({
+              title: `STUNT JUMP: ${r.name.toUpperCase()}`,
+              coins: 65,
+              score: 900,
+              kind: 'ramp',
+            });
+            break;
+          }
+        }
+      }
+
+      if (this.isAirborne) {
+        this.airTimeElapsed += clampedDt;
+        this.y += this.vy * clampedDt;
+        this.vy -= 26 * clampedDt; // Gravity
+
+        this.pitch = THREE.MathUtils.damp(this.pitch, 0.25, 4, clampedDt);
+        this.roll = THREE.MathUtils.damp(this.roll, steerTarget * 0.35, 6, clampedDt);
+
+        if (this.y <= groundY) {
+          this.y = groundY;
+          this.vy = 0;
+          this.isAirborne = false;
+          this.pitch = 0;
+          this.roll = 0;
+          soundManager.playCrash();
+          this.particleSystem.emitTireSmoke(this.x - 0.9, groundY, this.z - 1.2);
+          this.particleSystem.emitTireSmoke(this.x + 0.9, groundY, this.z - 1.2);
+
+          const jumpDist = Math.round(Math.hypot(this.x - this.airStartX, this.z - this.airStartZ));
+          if (this.airTimeElapsed >= 0.6 && jumpDist >= 12) {
+            const airtimeRounded = Math.round(this.airTimeElapsed * 10) / 10;
+            this.onJumpLanded?.(jumpDist, airtimeRounded, this.lastRampId);
+          }
+          this.lastRampId = undefined;
+        }
+      } else {
+        this.y = THREE.MathUtils.damp(this.y, groundY, 18, clampedDt);
+        this.pitch = -input.forward ? 0.03 : input.backward ? -0.04 : 0;
+        this.roll = THREE.MathUtils.damp(this.roll, -this.steerAngle * 0.15, 10, clampedDt);
+      }
     }
 
     // 6. Update Car Mesh Transform
@@ -537,17 +661,18 @@ export class CarController {
     this.mesh.rotation.x = this.pitch;
     this.mesh.rotation.z = this.roll;
 
-    // Spin wheels
+    // Spin wheels & steer front wheel hubs cleanly without disturbing camber
     const wheels = (this.mesh as any).userData?.wheels as THREE.Group[] | undefined;
+    const wheelMounts = (this.mesh as any).userData?.wheelMounts as THREE.Group[] | undefined;
     if (wheels) {
       const wheelSpin = (this.speed * clampedDt) / 0.36;
       for (const w of wheels) {
         w.rotation.x += wheelSpin;
       }
-      if (wheels.length >= 2) {
-        wheels[0].rotation.y = this.steerAngle * 0.8;
-        wheels[1].rotation.y = this.steerAngle * 0.8;
-      }
+    }
+    if (wheelMounts && wheelMounts.length >= 2) {
+      wheelMounts[0].rotation.y = this.steerAngle * 0.8;
+      wheelMounts[1].rotation.y = this.steerAngle * 0.8;
     }
 
     // 7. Collisions & Pickups
@@ -755,11 +880,26 @@ export class CarController {
     }
   }
 
-  private handleCrash(car: any) {
+  private handleCrash(_car: any) {
+    const impactSpeed = Math.abs(this.speed);
     this.invulnerableTimer = 1.8;
     this.speed = Math.min(this.speed * 0.35, 12);
     soundManager.playCrash();
     this.particleSystem.emitCrashSparks(this.x, this.y + 0.5, this.z + 1.0, 35);
+
+    if (impactSpeed > 12) {
+      const dmg = Math.min(28, Math.max(8, Math.round(impactSpeed * 0.45)));
+      this.health = Math.max(15, this.health - dmg);
+      if (this.health <= 45) {
+        this.onFloatingText?.({
+          id: Date.now(),
+          text: `ENGINE DAMAGED (${this.health}%) · VISIT REPAIR BAY`,
+          type: 'hazard',
+          score: 0,
+          timestamp: Date.now(),
+        });
+      }
+    }
     this.onCrash?.();
   }
 
@@ -873,6 +1013,10 @@ export class CarController {
         } else if (item.type === 'ramp') {
           if (!this.isAirborne) {
             this.isAirborne = true;
+            this.airStartX = this.x;
+            this.airStartZ = this.z;
+            this.airTimeElapsed = 0;
+            this.lastRampId = 'track-ramp';
             this.vy = 12.5; // launch up
             this.speed = Math.max(this.speed * 1.15, 38);
             soundManager.playJump();
@@ -910,8 +1054,12 @@ export class CarController {
     this.steerAngle = 0;
     this.driftAngle = 0;
     this.isAirborne = false;
+    this.loopProgress = -1;
+    this.loopCooldown = 0;
     this.vy = 0;
-    this.nitroAmount = 100;
+    this.health = 100;
+    this.damageSmokeTimer = 0;
+    this.nitroAmount = 100 + this.upgrades.nitro * 15;
     this.invulnerableTimer = 0;
     this.magnetTimer = 0;
     this.hasShield = false;

@@ -1,4 +1,14 @@
-import { CarStats, BiomeType, DecalType, TrackConfig, KeyBindings, Achievement } from '../types/game';
+import {
+  CarStats,
+  BiomeType,
+  DecalType,
+  TrackConfig,
+  KeyBindings,
+  Achievement,
+  CarStance,
+  EngineAudioProfile,
+  WorldRecords,
+} from '../types/game';
 
 export const CARS_CATALOG: CarStats[] = [
   {
@@ -326,3 +336,42 @@ export const BIOMES: { id: BiomeType; name: string; tag: string }[] = [
   { id: 'desert', name: 'Desert Canyon', tag: 'Terracotta Dunes' },
   { id: 'alpine', name: 'Alpine Overpass', tag: 'High Altitude Mist' },
 ];
+
+export const DEFAULT_CAR_STANCE: CarStance = {
+  rideHeight: 0,
+  camberDeg: -2,
+};
+
+export const ENGINE_AUDIO_PROFILES: Array<{
+  id: EngineAudioProfile;
+  name: string;
+  tag: string;
+  desc: string;
+}> = [
+  {
+    id: 'street_v6',
+    name: 'Street V6',
+    tag: 'Balanced',
+    desc: 'Crisp mid-range induction note with smooth gear transitions',
+  },
+  {
+    id: 'muscle_v8',
+    name: 'Muscle V8',
+    tag: 'Deep Growl',
+    desc: 'Low-end cross-plane rumble with aggressive exhaust bark',
+  },
+  {
+    id: 'twin_turbo',
+    name: 'Twin-Turbo Sport',
+    tag: 'BOV Spool',
+    desc: 'High-revving turbine whistle with blow-off valve chirps on shifts',
+  },
+];
+
+export const DEFAULT_WORLD_RECORDS: WorldRecords = {
+  raceBestTimes: {},
+  driftBestScores: {},
+  rampBestDistances: {},
+  bestJumpMeters: 0,
+  bestAirtimeSec: 0,
+};
